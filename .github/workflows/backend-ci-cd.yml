@@ -13,7 +13,7 @@ name: Backend CI/CD
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - "**.go"
       - "go.mod"
@@ -56,7 +56,7 @@ jobs:
     name: Deploy to VM
     needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
 
     steps:
       - name: Deploy over SSH
@@ -71,8 +71,8 @@ jobs:
             cd "${{ secrets.DEPLOY_PATH }}"
 
             git fetch origin
-            git checkout main
-            git pull origin main
+            git checkout master
+            git pull origin master
 
             docker compose up -d postgres minio minio-init
 
