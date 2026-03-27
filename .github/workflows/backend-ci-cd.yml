@@ -1,0 +1,82 @@
+# Репозиторий только backend: корень = этот каталог.
+#
+# Secrets (Settings → Secrets and variables → Actions):
+#   DEPLOY_HOST      — IP или домен VM
+#   DEPLOY_USER      — пользователь SSH
+#   DEPLOY_SSH_KEY   — приватный ключ (PEM целиком)
+#   DEPLOY_PATH      — каталог git clone этого репозитория на сервере
+#
+# На сервере: Docker + compose, затем git clone <backend-repo> в DEPLOY_PATH,
+# первый раз: cd DEPLOY_PATH && docker compose up -d
+
+name: Backend CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "migrations/**"
+      - ".github/workflows/backend-ci-cd.yml"
+  pull_request:
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "migrations/**"
+      - ".github/workflows/backend-ci-cd.yml"
+
+concurrency:
+  group: backend-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Go test
+        run: go test ./...
+
+      - name: Go build
+        run: go build -o /tmp/app ./cmd/app
+
+  deploy:
+    name: Deploy to VM
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.DEPLOY_PATH }}"
+
+            git fetch origin
+            git checkout main
+            git pull origin main
+
+            docker compose up -d postgres minio minio-init
+
+            docker compose build migrate
+            docker compose run --rm migrate
+
+            docker compose up -d --build --force-recreate app

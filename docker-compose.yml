@@ -1,0 +1,116 @@
+# Стек для отдельного репозитория backend (БД + MinIO + API).
+# На сервере: положите рядом файл .env с секретами (см. README репозитория).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: cloud
+      POSTGRES_USER: cloud
+      POSTGRES_PASSWORD: cloudpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cloud -d cloud"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  minio:
+    image: quay.io/minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: quay.io/minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c '
+        set -eu;
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+          sleep 1;
+        done;
+        mc mb --ignore-existing local/$$MINIO_BUCKET >/dev/null;
+        cat >/tmp/cors.json <<EOF
+        {
+          "CORSRules": [
+            {
+              "AllowedOrigins": ["http://localhost:4200"],
+              "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
+              "AllowedHeaders": ["*"],
+              "ExposeHeaders": ["ETag"],
+              "MaxAgeSeconds": 3000
+            }
+          ]
+        }
+        EOF
+        mc cors set local/$$MINIO_BUCKET /tmp/cors.json;
+      '
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_BUCKET: blobs
+    restart: "no"
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MIGRATE_ONLY: "true"
+      DB_INIT: "true"
+      DATABASE_URL: postgres://cloud:cloudpass@postgres:5432/cloud?sslmode=disable
+      JWT_SECRET: dev-jwt-secret-change-me
+      OPAQUE_KEYS_FILE: /data/opaque_server_keys.json
+    volumes:
+      - app-data:/data
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      HTTP_ADDR: ":8080"
+      LOG_LEVEL: info
+      DB_INIT: "false"
+      DATABASE_URL: postgres://cloud:cloudpass@postgres:5432/cloud?sslmode=disable
+      JWT_SECRET: dev-jwt-secret-change-me
+      OPAQUE_KEYS_FILE: /data/opaque_server_keys.json
+      MINIO_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: http://localhost:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: blobs
+      MINIO_USE_SSL: "false"
+      MINIO_REGION: us-east-1
+      MINIO_PRESIGN_TTL: 1h
+    ports:
+      - "8080:8080"
+    volumes:
+      - app-data:/data
+
+volumes:
+  pgdata:
+  minio-data:
+  app-data:

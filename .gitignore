@@ -1,0 +1,47 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test / coverage
+*.test
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Go
+vendor/
+
+# Env / secrets (не коммитить локальные ключи и URL)
+.env
+.env.*
+!.env.example
+
+# Local data (opaque keys, uploads, etc.)
+/data/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor / IDE
+.idea/
+*.swp
+*.swo
+*~
+.vscode/
+
+# Logs
+*.log
+
+# Debug
+__debug_bin
+
+# Docker overrides (опционально, если есть локальные compose)
+docker-compose.override.yml
