@@ -31,32 +31,21 @@ services:
     image: quay.io/minio/mc:latest
     depends_on:
       - minio
-    entrypoint: >
-      /bin/sh -c '
-        set -eu;
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
         until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
-          sleep 1;
-        done;
-        mc mb --ignore-existing local/$$MINIO_BUCKET >/dev/null;
-        cat >/tmp/cors.json <<EOF
-        {
-          "CORSRules": [
-            {
-              "AllowedOrigins": ["http://localhost:4200"],
-              "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
-              "AllowedHeaders": ["*"],
-              "ExposeHeaders": ["ETag"],
-              "MaxAgeSeconds": 3000
-            }
-          ]
-        }
-        EOF
-        mc cors set local/$$MINIO_BUCKET /tmp/cors.json;
-      '
+          sleep 1
+        done
+        mc mb --ignore-existing local/$$MINIO_BUCKET >/dev/null
+        printf '%s\n' "{\"CORSRules\":[{\"AllowedOrigins\":[\"$$FRONTEND_ORIGIN\"],\"AllowedMethods\":[\"GET\",\"PUT\",\"POST\",\"DELETE\",\"HEAD\"],\"AllowedHeaders\":[\"*\"],\"ExposeHeaders\":[\"ETag\"],\"MaxAgeSeconds\":3000}]}" > /tmp/cors.json
+        mc cors set local/$$MINIO_BUCKET /tmp/cors.json
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
       MINIO_BUCKET: blobs
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:4200}
     restart: "no"
 
   migrate:
@@ -95,7 +84,7 @@ services:
       JWT_SECRET: dev-jwt-secret-change-me
       OPAQUE_KEYS_FILE: /data/opaque_server_keys.json
       MINIO_ENDPOINT: minio:9000
-      MINIO_PUBLIC_ENDPOINT: http://localhost:9000
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-http://localhost:9000}
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
       MINIO_BUCKET: blobs
