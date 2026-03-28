@@ -69,7 +69,7 @@ type BlobRegistry interface {
 func (s *Service) PresignPut(ctx context.Context, contentType, fileName string) (*PresignPutResult, error) {
 	blobID := uuid.New()
 	cleanName := sanitizeFileName(fileName)
-	objectKey := fmt.Sprintf("blobs/%s/%s", blobID.String(), cleanName)
+	objectKey := fmt.Sprintf("%s/%s", blobID.String(), cleanName)
 
 	if err := s.Blobs.RegisterStoredBlob(ctx, blobID, cleanName, objectKey, contentType, methodPresign); err != nil {
 		return nil, fmt.Errorf("register blob: %w", err)
