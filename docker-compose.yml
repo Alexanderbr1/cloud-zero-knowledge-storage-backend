@@ -39,7 +39,7 @@ services:
           sleep 1
         done
         mc mb --ignore-existing local/$$MINIO_BUCKET >/dev/null
-        printf '%s\n' "{\"CORSRules\":[{\"AllowedOrigins\":[\"$$FRONTEND_ORIGIN\"],\"AllowedMethods\":[\"GET\",\"PUT\",\"POST\",\"DELETE\",\"HEAD\"],\"AllowedHeaders\":[\"*\"],\"ExposeHeaders\":[\"ETag\"],\"MaxAgeSeconds\":3000}]}" > /tmp/cors.json
+        printf '{"CORSRules":[{"AllowedOrigins":["http://localhost:4200","%s"],"AllowedMethods":["GET","PUT","POST","DELETE","HEAD"],"AllowedHeaders":["*"],"ExposeHeaders":["ETag"],"MaxAgeSeconds":3000}]}\n' "$$FRONTEND_ORIGIN" > /tmp/cors.json
         mc cors set local/$$MINIO_BUCKET /tmp/cors.json
     environment:
       MINIO_ROOT_USER: minioadmin
