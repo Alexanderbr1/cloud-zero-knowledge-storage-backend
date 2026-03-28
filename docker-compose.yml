@@ -1,6 +1,3 @@
-# Стек для отдельного репозитория backend (БД + MinIO + API).
-# На сервере: положите рядом файл .env с секретами (см. README репозитория).
-
 services:
   postgres:
     image: postgres:16-alpine
