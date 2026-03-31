@@ -49,7 +49,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: GolangCI-Lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           # v1.x golangci-lint собран с Go < 1.26 и падает на go 1.26+ в go.mod.
           version: v2.11.4
