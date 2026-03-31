@@ -24,6 +24,11 @@ func registerStorageRoutes(r chi.Router, d Deps) {
 
 func storagePresignPut(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		uid, ok := restapi.UserIDFromContext(r.Context())
+		if !ok || uid == uuid.Nil {
+			restapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
 		var in dto.StoragePresignPutRequest
 		if err := restapi.DecodeJSON(r, &in); err != nil {
 			restapi.WriteError(w, http.StatusBadRequest, "bad request")
@@ -36,7 +41,7 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 		if ct == "" {
 			ct = "application/octet-stream"
 		}
-		out, err := d.Storage.PresignPut(r.Context(), ct, in.FileName)
+		out, err := d.Storage.PresignPut(r.Context(), uid, ct, in.FileName)
 		if mapStorageErr(w, err) {
 			return
 		}
@@ -54,12 +59,17 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 
 func storagePresignGet(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		uid, ok := restapi.UserIDFromContext(r.Context())
+		if !ok || uid == uuid.Nil {
+			restapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
 		blobID, err := uuid.Parse(chi.URLParam(r, "blobID"))
 		if err != nil {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid blob_id")
 			return
 		}
-		out, err := d.Storage.PresignGet(r.Context(), blobID)
+		out, err := d.Storage.PresignGet(r.Context(), uid, blobID)
 		if mapStorageErr(w, err) {
 			return
 		}
@@ -77,12 +87,17 @@ func storagePresignGet(d Deps) http.HandlerFunc {
 
 func storageDeleteBlob(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		uid, ok := restapi.UserIDFromContext(r.Context())
+		if !ok || uid == uuid.Nil {
+			restapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
 		blobID, err := uuid.Parse(chi.URLParam(r, "blobID"))
 		if err != nil {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid blob_id")
 			return
 		}
-		if err := d.Storage.DeleteBlob(r.Context(), blobID); mapStorageErr(w, err) {
+		if err := d.Storage.DeleteBlob(r.Context(), uid, blobID); mapStorageErr(w, err) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -91,7 +106,12 @@ func storageDeleteBlob(d Deps) http.HandlerFunc {
 
 func storageListBlobs(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		items, err := d.Storage.ListBlobs(r.Context())
+		uid, ok := restapi.UserIDFromContext(r.Context())
+		if !ok || uid == uuid.Nil {
+			restapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		items, err := d.Storage.ListBlobs(r.Context(), uid)
 		if mapStorageErr(w, err) {
 			return
 		}

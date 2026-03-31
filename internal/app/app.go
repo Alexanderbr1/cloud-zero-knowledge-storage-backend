@@ -13,11 +13,16 @@ import (
 	"github.com/rs/zerolog"
 
 	"cloud-backend/config"
+	"cloud-backend/internal/controller/restapi"
 	v1 "cloud-backend/internal/controller/restapi/v1"
 	"cloud-backend/internal/repo/persistent/postgres"
 	miniostore "cloud-backend/internal/repo/storage/minio"
+	authuc "cloud-backend/internal/usecase/auth"
 	storageuc "cloud-backend/internal/usecase/storage"
+	jwtpkg "cloud-backend/pkg/jwt"
 )
+
+var _ restapi.ParseBearerJWT = (*jwtpkg.Service)(nil)
 
 // Run — composition root: БД, миграции, use case-ы, HTTP (см. internal/app в go-clean-template).
 func Run(cfg config.Config, log zerolog.Logger) error {
@@ -38,6 +43,13 @@ func Run(cfg config.Config, log zerolog.Logger) error {
 	}
 
 	store := postgres.NewStorage(pool)
+	tokens := jwtpkg.NewService([]byte(cfg.JWT.Secret), cfg.JWT.AccessTTL)
+	authSvc := &authuc.Service{
+		Users:      store,
+		Sessions:   store,
+		Tokens:     tokens,
+		RefreshTTL: cfg.JWT.RefreshTTL,
+	}
 
 	initCtx := context.Background()
 	var storageSvc *storageuc.Service
@@ -57,6 +69,8 @@ func Run(cfg config.Config, log zerolog.Logger) error {
 	}
 
 	handler := newHTTPHandler(v1.Deps{
+		Auth:    authSvc,
+		Tokens:  tokens,
 		Storage: storageSvc,
 	})
 

@@ -13,24 +13,24 @@ import (
 
 var _ storageuc.BlobRegistry = (*Storage)(nil)
 
-func (s *Storage) RegisterStoredBlob(ctx context.Context, id uuid.UUID, fileName, objectKey, contentType, uploadMethod string) error {
+func (s *Storage) RegisterStoredBlob(ctx context.Context, id, userID uuid.UUID, fileName, objectKey, contentType, uploadMethod string) error {
 	var ct *string
 	if contentType != "" {
 		ct = &contentType
 	}
 	_, err := s.Pool.Exec(ctx,
-		`INSERT INTO stored_blobs (id, file_name, object_key, content_type, upload_method)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		id, fileName, objectKey, ct, uploadMethod,
+		`INSERT INTO stored_blobs (id, user_id, file_name, object_key, content_type, upload_method)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		id, userID, fileName, objectKey, ct, uploadMethod,
 	)
 	return err
 }
 
-func (s *Storage) GetBlob(ctx context.Context, blobID uuid.UUID) (objectKey, contentType string, ok bool, err error) {
+func (s *Storage) GetBlobForUser(ctx context.Context, blobID, userID uuid.UUID) (objectKey, contentType string, ok bool, err error) {
 	var ct *string
 	err = s.Pool.QueryRow(ctx,
-		`SELECT object_key, content_type FROM stored_blobs WHERE id = $1`,
-		blobID,
+		`SELECT object_key, content_type FROM stored_blobs WHERE id = $1 AND user_id = $2`,
+		blobID, userID,
 	).Scan(&objectKey, &ct)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", "", false, nil
@@ -44,10 +44,10 @@ func (s *Storage) GetBlob(ctx context.Context, blobID uuid.UUID) (objectKey, con
 	return objectKey, contentType, true, nil
 }
 
-func (s *Storage) DeleteBlobRow(ctx context.Context, blobID uuid.UUID) (int64, error) {
+func (s *Storage) DeleteBlobRow(ctx context.Context, blobID, userID uuid.UUID) (int64, error) {
 	tag, err := s.Pool.Exec(ctx,
-		`DELETE FROM stored_blobs WHERE id = $1`,
-		blobID,
+		`DELETE FROM stored_blobs WHERE id = $1 AND user_id = $2`,
+		blobID, userID,
 	)
 	if err != nil {
 		return 0, err
@@ -55,11 +55,13 @@ func (s *Storage) DeleteBlobRow(ctx context.Context, blobID uuid.UUID) (int64, e
 	return tag.RowsAffected(), nil
 }
 
-func (s *Storage) ListBlobs(ctx context.Context) ([]storageuc.BlobInfo, error) {
+func (s *Storage) ListBlobsForUser(ctx context.Context, userID uuid.UUID) ([]storageuc.BlobInfo, error) {
 	rows, err := s.Pool.Query(ctx,
 		`SELECT id, file_name, object_key, content_type, created_at
 		 FROM stored_blobs
+		 WHERE user_id = $1
 		 ORDER BY created_at DESC`,
+		userID,
 	)
 	if err != nil {
 		return nil, err

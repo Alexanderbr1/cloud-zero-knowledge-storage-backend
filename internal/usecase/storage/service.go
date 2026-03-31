@@ -59,19 +59,22 @@ type ObjectStore interface {
 
 // BlobRegistry — метаданные загруженных blob'ов (потребитель: Service).
 type BlobRegistry interface {
-	RegisterStoredBlob(ctx context.Context, id uuid.UUID, fileName, objectKey, contentType, uploadMethod string) error
-	GetBlob(ctx context.Context, blobID uuid.UUID) (objectKey, contentType string, ok bool, err error)
-	DeleteBlobRow(ctx context.Context, blobID uuid.UUID) (rowsAffected int64, err error)
-	ListBlobs(ctx context.Context) ([]BlobInfo, error)
+	RegisterStoredBlob(ctx context.Context, id, userID uuid.UUID, fileName, objectKey, contentType, uploadMethod string) error
+	GetBlobForUser(ctx context.Context, blobID, userID uuid.UUID) (objectKey, contentType string, ok bool, err error)
+	DeleteBlobRow(ctx context.Context, blobID, userID uuid.UUID) (rowsAffected int64, err error)
+	ListBlobsForUser(ctx context.Context, userID uuid.UUID) ([]BlobInfo, error)
 }
 
-// contentType — уже нормализованный слоем доставки (непустой, длина проверена в DTO).
-func (s *Service) PresignPut(ctx context.Context, contentType, fileName string) (*PresignPutResult, error) {
+// PresignPut создаёт запись и presigned PUT; ключ в бакете: blobs/<user_id>/<blob_id>.
+func (s *Service) PresignPut(ctx context.Context, userID uuid.UUID, contentType, fileName string) (*PresignPutResult, error) {
+	if userID == uuid.Nil {
+		return nil, fmt.Errorf("presign put: empty user")
+	}
 	blobID := uuid.New()
 	cleanName := sanitizeFileName(fileName)
-	objectKey := fmt.Sprintf("%s/%s", blobID.String(), cleanName)
+	objectKey := fmt.Sprintf("blobs/%s/%s", userID.String(), blobID.String())
 
-	if err := s.Blobs.RegisterStoredBlob(ctx, blobID, cleanName, objectKey, contentType, methodPresign); err != nil {
+	if err := s.Blobs.RegisterStoredBlob(ctx, blobID, userID, cleanName, objectKey, contentType, methodPresign); err != nil {
 		return nil, fmt.Errorf("register blob: %w", err)
 	}
 
@@ -103,9 +106,8 @@ func sanitizeFileName(fileName string) string {
 	return name
 }
 
-// PresignGet выдаёт подписанный GET для скачивания файла.
-func (s *Service) PresignGet(ctx context.Context, blobID uuid.UUID) (*PresignGetResult, error) {
-	objectKey, contentType, ok, err := s.Blobs.GetBlob(ctx, blobID)
+func (s *Service) PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*PresignGetResult, error) {
+	objectKey, contentType, ok, err := s.Blobs.GetBlobForUser(ctx, blobID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("get blob: %w", err)
 	}
@@ -132,9 +134,8 @@ func (s *Service) PresignGet(ctx context.Context, blobID uuid.UUID) (*PresignGet
 	}, nil
 }
 
-// DeleteBlob удаляет объект в хранилище, затем строку в БД (чтобы не терять ссылку на ключ при сбое MinIO).
-func (s *Service) DeleteBlob(ctx context.Context, blobID uuid.UUID) error {
-	objectKey, _, ok, err := s.Blobs.GetBlob(ctx, blobID)
+func (s *Service) DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error {
+	objectKey, _, ok, err := s.Blobs.GetBlobForUser(ctx, blobID, userID)
 	if err != nil {
 		return fmt.Errorf("get blob: %w", err)
 	}
@@ -144,15 +145,14 @@ func (s *Service) DeleteBlob(ctx context.Context, blobID uuid.UUID) error {
 	if err := s.Objects.RemoveObject(ctx, objectKey); err != nil {
 		return fmt.Errorf("remove object: %w", err)
 	}
-	// n == 0 означает параллельное удаление: объект уже убран — считаем успехом.
-	if _, err := s.Blobs.DeleteBlobRow(ctx, blobID); err != nil {
+	if _, err := s.Blobs.DeleteBlobRow(ctx, blobID, userID); err != nil {
 		return fmt.Errorf("delete blob row: %w", err)
 	}
 	return nil
 }
 
-func (s *Service) ListBlobs(ctx context.Context) ([]BlobInfo, error) {
-	items, err := s.Blobs.ListBlobs(ctx)
+func (s *Service) ListBlobs(ctx context.Context, userID uuid.UUID) ([]BlobInfo, error) {
+	items, err := s.Blobs.ListBlobsForUser(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list blobs: %w", err)
 	}

@@ -2,10 +2,8 @@
 package config
 
 import (
-	"encoding/hex"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -18,26 +16,16 @@ type Config struct {
 
 	LogLevel string
 
-	JWT    JWTConfig
-	Opaque OpaqueConfig
+	JWT JWTConfig
 
 	// MinIO — объектное хранилище (пустой Endpoint = API загрузки не подключается).
 	MinIO MinIOConfig
 }
 
 type JWTConfig struct {
-	Secret string
-
+	Secret     string
 	AccessTTL  time.Duration
 	RefreshTTL time.Duration
-}
-
-type OpaqueConfig struct {
-	KeysFile string
-
-	// Optional identity used inside AKE transcript.
-	// If empty, server identity is derived inside the library from server public key.
-	ServerIdentityHex string
 }
 
 // MinIOConfig — S3-совместимое API (MinIO / AWS S3).
@@ -66,10 +54,6 @@ func Load() (Config, error) {
 			AccessTTL:  envDuration("JWT_ACCESS_TTL", 15*time.Minute),
 			RefreshTTL: envDuration("JWT_REFRESH_TTL", 30*24*time.Hour),
 		},
-		Opaque: OpaqueConfig{
-			KeysFile:          envString("OPAQUE_KEYS_FILE", "./data/opaque_server_keys.json"),
-			ServerIdentityHex: envString("OPAQUE_SERVER_ID_HEX", ""),
-		},
 		MinIO: MinIOConfig{
 			Endpoint:       envString("MINIO_ENDPOINT", ""),
 			PublicEndpoint: envString("MINIO_PUBLIC_ENDPOINT", ""),
@@ -87,20 +71,6 @@ func Load() (Config, error) {
 	}
 	if cfg.JWT.Secret == "" {
 		return Config{}, fmt.Errorf("JWT_SECRET is required")
-	}
-
-	// Make KeysFile absolute to avoid surprises when running from another directory.
-	if cfg.Opaque.KeysFile != "" && !filepath.IsAbs(cfg.Opaque.KeysFile) {
-		if wd, err := os.Getwd(); err == nil {
-			cfg.Opaque.KeysFile = filepath.Join(wd, cfg.Opaque.KeysFile)
-		}
-	}
-
-	// Validate optional identity if provided.
-	if cfg.Opaque.ServerIdentityHex != "" {
-		if _, err := hex.DecodeString(cfg.Opaque.ServerIdentityHex); err != nil {
-			return Config{}, fmt.Errorf("OPAQUE_SERVER_ID_HEX must be hex: %w", err)
-		}
 	}
 
 	if cfg.MinIO.Endpoint != "" {

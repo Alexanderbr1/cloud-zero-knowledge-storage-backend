@@ -58,7 +58,6 @@ services:
       DB_INIT: "true"
       DATABASE_URL: postgres://cloud:cloudpass@postgres:5432/cloud?sslmode=disable
       JWT_SECRET: dev-jwt-secret-change-me
-      OPAQUE_KEYS_FILE: /data/opaque_server_keys.json
     volumes:
       - app-data:/data
     restart: "no"
@@ -80,7 +79,6 @@ services:
       DB_INIT: "false"
       DATABASE_URL: postgres://cloud:cloudpass@postgres:5432/cloud?sslmode=disable
       JWT_SECRET: dev-jwt-secret-change-me
-      OPAQUE_KEYS_FILE: /data/opaque_server_keys.json
       MINIO_ENDPOINT: minio:9000
       MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-http://localhost:9000}
       MINIO_ACCESS_KEY: minioadmin
