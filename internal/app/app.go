@@ -33,7 +33,7 @@ func Run(cfg config.Config, log zerolog.Logger) error {
 	defer pool.Close()
 
 	if cfg.DBInit || cfg.MigrateOnly {
-		if err := postgres.RunMigrations(pool); err != nil {
+		if err := postgres.RunMigrations(pool, log); err != nil {
 			return fmt.Errorf("migrations: %w", err)
 		}
 	}
