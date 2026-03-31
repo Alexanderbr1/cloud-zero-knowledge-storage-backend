@@ -1,15 +1,15 @@
+# Конфиг для golangci-lint v2 (нужен для go 1.26+ в go.mod).
+# https://golangci-lint.run/docs/configuration/file/
+version: "2"
+
 run:
   timeout: 5m
 
 linters:
   enable:
     - errcheck
-    - gosimple
     - govet
     - ineffassign
     - staticcheck
     - typecheck
     - unused
-
-issues:
-  exclude-use-default: false

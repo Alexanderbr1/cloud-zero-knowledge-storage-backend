@@ -21,6 +21,7 @@ on:
       - "Dockerfile"
       - "docker-compose.yml"
       - "migrations/**"
+      - ".golangci.yml"
       - ".github/workflows/backend-ci-cd.yml"
   pull_request:
     paths:
@@ -28,6 +29,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "migrations/**"
+      - ".golangci.yml"
       - ".github/workflows/backend-ci-cd.yml"
 
 concurrency:
@@ -49,7 +51,8 @@ jobs:
       - name: GolangCI-Lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          # v1.x golangci-lint собран с Go < 1.26 и падает на go 1.26+ в go.mod.
+          version: v2.11.4
           args: --timeout=5m
 
       - name: Go test
