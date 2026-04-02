@@ -73,9 +73,8 @@ func (s *Store) EnsureBucket(ctx context.Context) error {
 	return s.client.MakeBucket(ctx, s.bucket, minio.MakeBucketOptions{})
 }
 
-func (s *Store) PresignedPutObject(ctx context.Context, objectKey string, contentType string, expiry time.Duration) (*url.URL, error) {
-	// Для MVP не включаем Content-Type в подписанные заголовки:
-	// это упрощает загрузку из браузера и устраняет SignatureDoesNotMatch из-за рассинхрона заголовков.
+func (s *Store) PresignedPutObject(ctx context.Context, objectKey string, expiry time.Duration) (*url.URL, error) {
+	// Content-Type не входит в подпись — клиент может передать любой (часто application/octet-stream для ciphertext).
 	return s.presignClient.PresignedPutObject(ctx, s.bucket, objectKey, expiry)
 }
 

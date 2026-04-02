@@ -1,51 +1,35 @@
 package restapi
 
 import (
-	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
-	"sync"
 
 	"github.com/go-playground/validator/v10"
 )
 
-// requestValidate — один экземпляр на процесс (кэш тегов), см. https://pkg.go.dev/github.com/go-playground/validator/v10
-var (
-	requestValidate     *validator.Validate
-	initRequestValidate sync.Once
-)
+var validate *validator.Validate
 
-func validatorInstance() *validator.Validate {
-	initRequestValidate.Do(func() {
-		v := validator.New(validator.WithRequiredStructEnabled())
-		v.RegisterTagNameFunc(func(f reflect.StructField) string {
-			name := strings.SplitN(f.Tag.Get("json"), ",", 2)[0]
-			if name == "-" || name == "" {
-				return f.Name
-			}
-			return name
-		})
-		// std_base64 — стандартный base64; пустая строка пропускается (обязательность — через required).
-		_ = v.RegisterValidation("std_base64", func(fl validator.FieldLevel) bool {
-			s := fl.Field().String()
-			if s == "" {
-				return true
-			}
-			_, err := base64.StdEncoding.DecodeString(s)
-			return err == nil
-		})
-		requestValidate = v
+func init() {
+	validate = validator.New(validator.WithRequiredStructEnabled())
+	validate.RegisterTagNameFunc(func(f reflect.StructField) string {
+		name := strings.SplitN(f.Tag.Get("json"), ",", 2)[0]
+		if name == "-" || name == "" {
+			return f.Name
+		}
+		return name
 	})
-	return requestValidate
 }
 
-// ValidateStruct проверяет DTO тегами validate; при ошибке пишет 400 и возвращает false.
-func ValidateStruct(w http.ResponseWriter, v any) bool {
-	err := validatorInstance().Struct(v)
+func ValidateStruct(v any) error {
+	return validate.Struct(v)
+}
+
+func WriteValidationError(w http.ResponseWriter, err error) {
 	if err == nil {
-		return true
+		return
 	}
 
 	var verrs validator.ValidationErrors
@@ -55,21 +39,21 @@ func ValidateStruct(w http.ResponseWriter, v any) bool {
 			fields = append(fields, map[string]string{
 				"field": fe.Field(),
 				"tag":   fe.Tag(),
+				"value": fmt.Sprint(fe.Value()),
 			})
 		}
 		WriteJSON(w, http.StatusBadRequest, map[string]any{
 			"error":  "validation failed",
 			"fields": fields,
 		})
-		return false
+		return
 	}
 
 	var inv *validator.InvalidValidationError
 	if errors.As(err, &inv) {
 		WriteError(w, http.StatusBadRequest, "bad request")
-		return false
+		return
 	}
 
 	WriteError(w, http.StatusBadRequest, "bad request")
-	return false
 }

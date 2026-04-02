@@ -42,14 +42,14 @@ go run ./cmd/app
 
 | Метод | Путь | Описание |
 |--------|------|----------|
-| `POST` | `/v1/auth/register` | Тело: `{"email":"...","password":"..."}` (пароль min 8 символов). **201** + пара токенов (см. ниже). |
-| `POST` | `/v1/auth/login` | Тело: `{"email":"...","password":"..."}`. **200** + пара токенов. |
-| `POST` | `/v1/auth/refresh` | Тело: `{"refresh_token":"..."}`. **200** + новая пара (старый refresh инвалидируется — ротация). **401**, если сессия просрочена или отозвана. |
-| `POST` | `/v1/auth/logout` | Тело: `{"refresh_token":"..."}` (можно опустить). **204** — сессия отозвана или токен не найден (идемпотентно). |
+| `POST` | `/v1/auth/register` | Тело: `{"email":"...","password":"..."}` (пароль min 8 символов). **201** + JSON с access и **Set-Cookie** с refresh (см. ниже). |
+| `POST` | `/v1/auth/login` | Тело: `{"email":"...","password":"..."}`. **200** + JSON с access и **Set-Cookie** с refresh. |
+| `POST` | `/v1/auth/refresh` | Тело не нужно: refresh берётся из **HttpOnly**-куки (имя по умолчанию `refresh_token`). **200** + новый access и новая кука (ротация). **401** — нет/невалидный refresh (кука сбрасывается). |
+| `POST` | `/v1/auth/logout` | Refresh из куки; **204** — кука очищается, сессия отзывается при наличии валидного токена (идемпотентно). |
 
-Ответ register/login/refresh содержит: `access_token`, `refresh_token`, `expires_in` (секунды access), `refresh_expires_in` (секунды refresh), `token_type`: `Bearer`.
+Ответ register/login/refresh в JSON: `access_token`, `expires_in` (секунды access), `refresh_expires_in` (секунды жизни refresh), `token_type`: `Bearer`. Сам **refresh-токен в JSON не отдаётся** — только в куке `HttpOnly`; при HTTPS включайте `REFRESH_COOKIE_SECURE=true`.
 
-Переменные: `JWT_ACCESS_TTL` (например `15m`), `JWT_REFRESH_TTL` (например `720h`).
+Переменные: `JWT_ACCESS_TTL` (например `15m`), `JWT_REFRESH_TTL` (например `720h`), опционально кука: `REFRESH_COOKIE_NAME`, `REFRESH_COOKIE_PATH`, `REFRESH_COOKIE_DOMAIN`, `REFRESH_COOKIE_SECURE`, `REFRESH_COOKIE_SAMESITE` (`lax` \| `strict` \| `none`; для `none` обязателен `REFRESH_COOKIE_SECURE=true`). Для SPA на **другом origin** нужны `fetch`/`axios` с `credentials: 'include'` и CORS с конкретным `Access-Control-Allow-Origin` и `Access-Control-Allow-Credentials: true`.
 
 Дальше для `/v1/storage/*` нужен заголовок:
 
@@ -59,7 +59,7 @@ go run ./cmd/app
 
 | Метод | Путь | Описание |
 |--------|------|----------|
-| `POST` | `/v1/storage/presign` | Тело: `{"content_type":"application/pdf","file_name":"report.pdf"}`. Ответ: `upload_url`, `blob_id`, `object_key` (`blobs/<user_id>/<blob_id>`). Клиент делает **PUT** на `upload_url` с телом файла. |
+| `POST` | `/v1/storage/presign` | Тело: `{"file_name":"report.pdf"}`. Сервер **не хранит MIME-тип**; ответ: `upload_url`, `blob_id`, `object_key` (`blobs/<user_id>/<blob_id>`). Клиент делает **PUT** на `upload_url` с телом (часто `application/octet-stream` для ciphertext). |
 | `GET` | `/v1/storage/blobs` | Список файлов **текущего пользователя**. |
 | `POST` | `/v1/storage/blobs/{blob_id}/presign-get` | Временная ссылка на скачивание из MinIO/S3. |
 | `DELETE` | `/v1/storage/blobs/{blob_id}` | Удаление объекта и метаданных (**только свой** blob). **404**, если чужой или нет записи. |
@@ -75,6 +75,18 @@ docker run -p 9000:9000 -p 9001:9001 \
 ```
 
 Создайте bucket `blobs` (или имя из `MINIO_BUCKET`) в консоли `http://127.0.0.1:9001`, либо включите `DB_INIT=true` — приложение создаст bucket при старте, если его ещё нет.
+
+## Миграции
+
+По одной паре файлов на таблицу (порядок важен из‑за FK):
+
+| Версия | Файлы | Таблица |
+|--------|--------|---------|
+| `1` | `000001_users.*` | `users` |
+| `2` | `000002_stored_blobs.*` | `stored_blobs` (без `content_type`) |
+| `3` | `000003_refresh_sessions.*` | `refresh_sessions` |
+
+Если база уже создавалась **другой** историей миграций, пересоздайте volume Postgres или очистите БД, иначе `migrate` может конфликтовать с `schema_migrations`.
 
 ## Сборка
 

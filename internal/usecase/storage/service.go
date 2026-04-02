@@ -37,36 +37,34 @@ type PresignGetResult struct {
 	DownloadURL  string
 	ExpiresIn    int64
 	HTTPMethod   string
-	ContentType  string
 	Instructions string
 }
 
 type BlobInfo struct {
-	BlobID      uuid.UUID
-	FileName    string
-	ObjectKey   string
-	ContentType string
-	CreatedAt   time.Time
+	BlobID    uuid.UUID
+	FileName  string
+	ObjectKey string
+	CreatedAt time.Time
 }
 
 // ObjectStore — объектное хранилище S3-совместимое (потребитель: Service).
 type ObjectStore interface {
 	EnsureBucket(ctx context.Context) error
-	PresignedPutObject(ctx context.Context, objectKey string, contentType string, expiry time.Duration) (*url.URL, error)
+	PresignedPutObject(ctx context.Context, objectKey string, expiry time.Duration) (*url.URL, error)
 	PresignedGetObject(ctx context.Context, objectKey string, expiry time.Duration) (*url.URL, error)
 	RemoveObject(ctx context.Context, objectKey string) error
 }
 
 // BlobRegistry — метаданные загруженных blob'ов (потребитель: Service).
 type BlobRegistry interface {
-	RegisterStoredBlob(ctx context.Context, id, userID uuid.UUID, fileName, objectKey, contentType, uploadMethod string) error
-	GetBlobForUser(ctx context.Context, blobID, userID uuid.UUID) (objectKey, contentType string, ok bool, err error)
+	RegisterStoredBlob(ctx context.Context, id, userID uuid.UUID, fileName, objectKey, uploadMethod string) error
+	GetBlobForUser(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error)
 	DeleteBlobRow(ctx context.Context, blobID, userID uuid.UUID) (rowsAffected int64, err error)
 	ListBlobsForUser(ctx context.Context, userID uuid.UUID) ([]BlobInfo, error)
 }
 
 // PresignPut создаёт запись и presigned PUT; ключ в бакете: blobs/<user_id>/<blob_id>.
-func (s *Service) PresignPut(ctx context.Context, userID uuid.UUID, contentType, fileName string) (*PresignPutResult, error) {
+func (s *Service) PresignPut(ctx context.Context, userID uuid.UUID, fileName string) (*PresignPutResult, error) {
 	if userID == uuid.Nil {
 		return nil, fmt.Errorf("presign put: empty user")
 	}
@@ -74,11 +72,11 @@ func (s *Service) PresignPut(ctx context.Context, userID uuid.UUID, contentType,
 	cleanName := sanitizeFileName(fileName)
 	objectKey := fmt.Sprintf("blobs/%s/%s", userID.String(), blobID.String())
 
-	if err := s.Blobs.RegisterStoredBlob(ctx, blobID, userID, cleanName, objectKey, contentType, methodPresign); err != nil {
+	if err := s.Blobs.RegisterStoredBlob(ctx, blobID, userID, cleanName, objectKey, methodPresign); err != nil {
 		return nil, fmt.Errorf("register blob: %w", err)
 	}
 
-	u, err := s.Objects.PresignedPutObject(ctx, objectKey, contentType, s.PresignTTL)
+	u, err := s.Objects.PresignedPutObject(ctx, objectKey, s.PresignTTL)
 	if err != nil {
 		return nil, fmt.Errorf("presign put: %w", err)
 	}
@@ -107,15 +105,12 @@ func sanitizeFileName(fileName string) string {
 }
 
 func (s *Service) PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*PresignGetResult, error) {
-	objectKey, contentType, ok, err := s.Blobs.GetBlobForUser(ctx, blobID, userID)
+	objectKey, ok, err := s.Blobs.GetBlobForUser(ctx, blobID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("get blob: %w", err)
 	}
 	if !ok {
 		return nil, ErrNotFound
-	}
-	if contentType == "" {
-		contentType = "application/octet-stream"
 	}
 
 	u, err := s.Objects.PresignedGetObject(ctx, objectKey, s.PresignTTL)
@@ -129,13 +124,12 @@ func (s *Service) PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*Pr
 		DownloadURL:  u.String(),
 		ExpiresIn:    int64(s.PresignTTL.Seconds()),
 		HTTPMethod:   "GET",
-		ContentType:  contentType,
-		Instructions: "GET download_url to download file bytes",
+		Instructions: "GET download_url; object is opaque bytes (client-side crypto / type is local only)",
 	}, nil
 }
 
 func (s *Service) DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error {
-	objectKey, _, ok, err := s.Blobs.GetBlobForUser(ctx, blobID, userID)
+	objectKey, ok, err := s.Blobs.GetBlobForUser(ctx, blobID, userID)
 	if err != nil {
 		return fmt.Errorf("get blob: %w", err)
 	}

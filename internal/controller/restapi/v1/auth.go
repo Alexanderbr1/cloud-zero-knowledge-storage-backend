@@ -4,97 +4,99 @@ import (
 	"errors"
 	"net/http"
 
+	"cloud-backend/config"
 	"cloud-backend/internal/controller/restapi"
 	"cloud-backend/internal/controller/restapi/v1/dto"
 	authuc "cloud-backend/internal/usecase/auth"
 )
 
-func registerAuth(d Deps) http.HandlerFunc {
+const tokenTypeBearer = "Bearer"
+
+func register(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in dto.RegisterRequest
 		if err := restapi.DecodeJSON(r, &in); err != nil {
 			restapi.WriteError(w, http.StatusBadRequest, "bad request")
 			return
 		}
-		if !restapi.ValidateStruct(w, &in) {
+		if err := restapi.ValidateStruct(&in); err != nil {
+			restapi.WriteValidationError(w, err)
 			return
 		}
 		out, err := d.Auth.Register(r.Context(), in.Email, in.Password)
-		if mapAuthErr(w, err) {
+		if err != nil {
+			writeAuthErr(w, err)
 			return
 		}
-		writeTokenResponse(w, http.StatusCreated, out)
+		writeTokenResponse(w, d.RefreshCookie, http.StatusCreated, out)
 	}
 }
 
-func loginAuth(d Deps) http.HandlerFunc {
+func login(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in dto.LoginRequest
 		if err := restapi.DecodeJSON(r, &in); err != nil {
 			restapi.WriteError(w, http.StatusBadRequest, "bad request")
 			return
 		}
-		if !restapi.ValidateStruct(w, &in) {
+		if err := restapi.ValidateStruct(&in); err != nil {
+			restapi.WriteValidationError(w, err)
 			return
 		}
 		out, err := d.Auth.Login(r.Context(), in.Email, in.Password)
-		if mapAuthErr(w, err) {
+		if err != nil {
+			writeAuthErr(w, err)
 			return
 		}
-		writeTokenResponse(w, http.StatusOK, out)
+		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, out)
 	}
 }
 
-func refreshAuth(d Deps) http.HandlerFunc {
+func refresh(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var in dto.RefreshRequest
-		if err := restapi.DecodeJSON(r, &in); err != nil {
-			restapi.WriteError(w, http.StatusBadRequest, "bad request")
+		rt := readRefreshToken(r, d.RefreshCookie.Name)
+		if rt == "" {
+			restapi.WriteError(w, http.StatusUnauthorized, "invalid refresh token")
 			return
 		}
-		if !restapi.ValidateStruct(w, &in) {
+
+		out, err := d.Auth.Refresh(r.Context(), rt)
+		if err != nil {
+			if errors.Is(err, authuc.ErrInvalidRefresh) {
+				clearRefreshTokenCookie(w, d.RefreshCookie)
+			}
+			writeAuthErr(w, err)
 			return
 		}
-		out, err := d.Auth.Refresh(r.Context(), in.RefreshToken)
-		if mapAuthErr(w, err) {
-			return
-		}
-		writeTokenResponse(w, http.StatusOK, out)
+		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, out)
 	}
 }
 
-func logoutAuth(d Deps) http.HandlerFunc {
+func logout(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var in dto.LogoutRequest
-		if err := restapi.DecodeJSON(r, &in); err != nil {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		if !restapi.ValidateStruct(w, &in) {
-			return
-		}
-		if err := d.Auth.Logout(r.Context(), in.RefreshToken); err != nil {
-			mapAuthErr(w, err)
-			return
-		}
+		rt := readRefreshToken(r, d.RefreshCookie.Name)
+		_ = d.Auth.Logout(r.Context(), rt)
+		clearRefreshTokenCookie(w, d.RefreshCookie)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
-func writeTokenResponse(w http.ResponseWriter, status int, out authuc.TokenPair) {
+func writeTokenResponse(w http.ResponseWriter, cookieCfg config.RefreshCookieConfig, status int, out authuc.TokenPair) {
+	maxAge := int(out.RefreshExpiresIn)
+	if maxAge < 0 {
+		maxAge = 0
+	}
+	setRefreshTokenCookie(w, cookieCfg, out.RefreshToken, maxAge)
+
 	restapi.WriteJSON(w, status, dto.TokenResponse{
 		AccessToken:      out.AccessToken,
-		RefreshToken:     out.RefreshToken,
 		ExpiresIn:        out.AccessExpiresIn,
 		RefreshExpiresIn: out.RefreshExpiresIn,
-		TokenType:        "Bearer",
+		TokenType:        tokenTypeBearer,
 	})
 }
 
-func mapAuthErr(w http.ResponseWriter, err error) bool {
-	if err == nil {
-		return false
-	}
+func writeAuthErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, authuc.ErrInvalidInput):
 		restapi.WriteError(w, http.StatusBadRequest, "bad request")
@@ -107,5 +109,4 @@ func mapAuthErr(w http.ResponseWriter, err error) bool {
 	default:
 		restapi.WriteError(w, http.StatusInternalServerError, "internal error")
 	}
-	return true
 }

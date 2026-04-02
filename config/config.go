@@ -3,7 +3,9 @@ package config
 
 import (
 	"fmt"
+	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -18,8 +20,20 @@ type Config struct {
 
 	JWT JWTConfig
 
+	// RefreshCookie — имя и атрибуты HttpOnly-куки с refresh-токеном.
+	RefreshCookie RefreshCookieConfig
+
 	// MinIO — объектное хранилище (пустой Endpoint = API загрузки не подключается).
 	MinIO MinIOConfig
+}
+
+// RefreshCookieConfig — кука refresh_token (HttpOnly + Secure при HTTPS).
+type RefreshCookieConfig struct {
+	Name     string
+	Path     string
+	Domain   string
+	Secure   bool
+	SameSite http.SameSite
 }
 
 type JWTConfig struct {
@@ -54,6 +68,13 @@ func Load() (Config, error) {
 			AccessTTL:  envDuration("JWT_ACCESS_TTL", 15*time.Minute),
 			RefreshTTL: envDuration("JWT_REFRESH_TTL", 30*24*time.Hour),
 		},
+		RefreshCookie: RefreshCookieConfig{
+			Name:     envString("REFRESH_COOKIE_NAME", "refresh_token"),
+			Path:     envString("REFRESH_COOKIE_PATH", "/"),
+			Domain:   envString("REFRESH_COOKIE_DOMAIN", ""),
+			Secure:   envBool("REFRESH_COOKIE_SECURE", false),
+			SameSite: parseSameSite(envString("REFRESH_COOKIE_SAMESITE", "lax")),
+		},
 		MinIO: MinIOConfig{
 			Endpoint:       envString("MINIO_ENDPOINT", ""),
 			PublicEndpoint: envString("MINIO_PUBLIC_ENDPOINT", ""),
@@ -72,6 +93,9 @@ func Load() (Config, error) {
 	if cfg.JWT.Secret == "" {
 		return Config{}, fmt.Errorf("JWT_SECRET is required")
 	}
+	if cfg.RefreshCookie.SameSite == http.SameSiteNoneMode && !cfg.RefreshCookie.Secure {
+		return Config{}, fmt.Errorf("REFRESH_COOKIE_SAMESITE=none requires REFRESH_COOKIE_SECURE=true")
+	}
 
 	if cfg.MinIO.Endpoint != "" {
 		if cfg.MinIO.AccessKey == "" || cfg.MinIO.SecretKey == "" {
@@ -80,6 +104,17 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func parseSameSite(s string) http.SameSite {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "strict":
+		return http.SameSiteStrictMode
+	case "none":
+		return http.SameSiteNoneMode
+	default:
+		return http.SameSiteLaxMode
+	}
 }
 
 func envString(key, def string) string {

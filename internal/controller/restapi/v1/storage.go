@@ -34,14 +34,11 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "bad request")
 			return
 		}
-		if !restapi.ValidateStruct(w, &in) {
+		if err := restapi.ValidateStruct(&in); err != nil {
+			restapi.WriteValidationError(w, err)
 			return
 		}
-		ct := in.ContentType
-		if ct == "" {
-			ct = "application/octet-stream"
-		}
-		out, err := d.Storage.PresignPut(r.Context(), uid, ct, in.FileName)
+		out, err := d.Storage.PresignPut(r.Context(), uid, in.FileName)
 		if mapStorageErr(w, err) {
 			return
 		}
@@ -51,8 +48,7 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 			UploadURL:    out.UploadURL,
 			ExpiresIn:    out.ExpiresIn,
 			HTTPMethod:   out.HTTPMethod,
-			ContentType:  ct,
-			Instructions: "PUT file bytes to upload_url; Content-Type header is optional",
+			Instructions: "PUT file bytes to upload_url; Content-Type is not stored server-side (use application/octet-stream if unsure)",
 		})
 	}
 }
@@ -79,7 +75,6 @@ func storagePresignGet(d Deps) http.HandlerFunc {
 			DownloadURL:  out.DownloadURL,
 			ExpiresIn:    out.ExpiresIn,
 			HTTPMethod:   out.HTTPMethod,
-			ContentType:  out.ContentType,
 			Instructions: out.Instructions,
 		})
 	}
@@ -118,11 +113,10 @@ func storageListBlobs(d Deps) http.HandlerFunc {
 		resp := make([]dto.StorageBlobItem, 0, len(items))
 		for _, item := range items {
 			resp = append(resp, dto.StorageBlobItem{
-				BlobID:      item.BlobID.String(),
-				FileName:    item.FileName,
-				ObjectKey:   item.ObjectKey,
-				ContentType: item.ContentType,
-				CreatedAt:   item.CreatedAt,
+				BlobID:    item.BlobID.String(),
+				FileName:  item.FileName,
+				ObjectKey: item.ObjectKey,
+				CreatedAt: item.CreatedAt,
 			})
 		}
 		restapi.WriteJSON(w, http.StatusOK, dto.StorageListBlobsResponse{Items: resp})

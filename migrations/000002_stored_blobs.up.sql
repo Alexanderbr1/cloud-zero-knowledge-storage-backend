@@ -1,8 +1,11 @@
--- Метаданные blob'ов.
-CREATE TABLE IF NOT EXISTS stored_blobs (
+-- Метаданные объектов в MinIO; MIME-тип на сервере не храним.
+CREATE TABLE stored_blobs (
   id uuid PRIMARY KEY,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  file_name text NOT NULL,
   object_key text NOT NULL UNIQUE,
-  content_type text NULL,
   upload_method text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE INDEX idx_stored_blobs_user_id ON stored_blobs(user_id);

@@ -69,9 +69,10 @@ func Run(cfg config.Config, log zerolog.Logger) error {
 	}
 
 	handler := newHTTPHandler(v1.Deps{
-		Auth:    authSvc,
-		Tokens:  tokens,
-		Storage: storageSvc,
+		Auth:          authSvc,
+		Tokens:        tokens,
+		Storage:       storageSvc,
+		RefreshCookie: cfg.RefreshCookie,
 	})
 
 	srv := &http.Server{

@@ -1,2 +1,0 @@
-ALTER TABLE stored_blobs
-ADD COLUMN IF NOT EXISTS file_name text NOT NULL DEFAULT '';
