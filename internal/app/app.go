@@ -61,23 +61,18 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 		RefreshTTL: cfg.JWT.RefreshTTL,
 	}
 
-	var storageSvc *storageuc.Service
-	if cfg.MinIO.Endpoint != "" {
-		ms, err := miniostore.NewStore(cfg.MinIO)
-		if err != nil {
-			return v1.Deps{}, fmt.Errorf("minio: %w", err)
-		}
-		if err := ms.EnsureBucket(ctx); err != nil {
-			return v1.Deps{}, fmt.Errorf("minio bucket: %w", err)
-		}
-		storageSvc = &storageuc.Service{
-			Objects:    ms,
-			Blobs:      store,
-			PresignTTL: cfg.MinIO.PresignTTL,
-		}
+	ms, err := miniostore.NewStore(cfg.MinIO)
+	if err != nil {
+		return v1.Deps{}, fmt.Errorf("minio: %w", err)
 	}
-
-	_ = log // зарезервирован для future: инициализация трассировки, метрик и т.д.
+	if err := ms.EnsureBucket(ctx); err != nil {
+		return v1.Deps{}, fmt.Errorf("minio bucket: %w", err)
+	}
+	storageSvc := &storageuc.Service{
+		Objects:    ms,
+		Blobs:      store,
+		PresignTTL: cfg.MinIO.PresignTTL,
+	}
 
 	return v1.Deps{
 		Auth:          authSvc,

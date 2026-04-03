@@ -133,20 +133,11 @@ func (l *loader) buildRefreshCookie() RefreshCookieConfig {
 }
 
 func (l *loader) buildMinIO() MinIOConfig {
-	endpoint := envStr("MINIO_ENDPOINT", "")
-	if endpoint != "" {
-		if envStr("MINIO_ACCESS_KEY", "") == "" {
-			l.errs = append(l.errs, "MINIO_ACCESS_KEY: required when MINIO_ENDPOINT is set")
-		}
-		if envStr("MINIO_SECRET_KEY", "") == "" {
-			l.errs = append(l.errs, "MINIO_SECRET_KEY: required when MINIO_ENDPOINT is set")
-		}
-	}
 	return MinIOConfig{
-		Endpoint:       endpoint,
+		Endpoint:       l.requireStr("MINIO_ENDPOINT"),
 		PublicEndpoint: envStr("MINIO_PUBLIC_ENDPOINT", ""),
-		AccessKey:      envStr("MINIO_ACCESS_KEY", ""),
-		SecretKey:      envStr("MINIO_SECRET_KEY", ""),
+		AccessKey:      l.requireStr("MINIO_ACCESS_KEY"),
+		SecretKey:      l.requireStr("MINIO_SECRET_KEY"),
 		Bucket:         envStr("MINIO_BUCKET", "blobs"),
 		UseSSL:         envBool("MINIO_USE_SSL", false),
 		Region:         envStr("MINIO_REGION", "us-east-1"),
