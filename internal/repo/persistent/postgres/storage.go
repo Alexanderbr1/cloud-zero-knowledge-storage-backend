@@ -2,11 +2,11 @@ package postgres
 
 import "github.com/jackc/pgx/v5/pgxpool"
 
-// Storage — Postgres-репозиторий для storage MVP.
+// Storage — Postgres-репозиторий (реализует UserRepository, SessionRepository, BlobRegistry).
 type Storage struct {
-	Pool *pgxpool.Pool
+	pool *pgxpool.Pool
 }
 
 func NewStorage(pool *pgxpool.Pool) *Storage {
-	return &Storage{Pool: pool}
+	return &Storage{pool: pool}
 }

@@ -10,18 +10,17 @@ import (
 	"github.com/go-playground/validator/v10"
 )
 
-var validate *validator.Validate
-
-func init() {
-	validate = validator.New(validator.WithRequiredStructEnabled())
-	validate.RegisterTagNameFunc(func(f reflect.StructField) string {
+var validate = func() *validator.Validate {
+	v := validator.New(validator.WithRequiredStructEnabled())
+	v.RegisterTagNameFunc(func(f reflect.StructField) string {
 		name := strings.SplitN(f.Tag.Get("json"), ",", 2)[0]
 		if name == "-" || name == "" {
 			return f.Name
 		}
 		return name
 	})
-}
+	return v
+}()
 
 func ValidateStruct(v any) error {
 	return validate.Struct(v)
@@ -34,24 +33,18 @@ func WriteValidationError(w http.ResponseWriter, err error) {
 
 	var verrs validator.ValidationErrors
 	if errors.As(err, &verrs) {
-		fields := make([]map[string]string, 0, len(verrs))
+		fields := make([]fieldError, 0, len(verrs))
 		for _, fe := range verrs {
-			fields = append(fields, map[string]string{
-				"field": fe.Field(),
-				"tag":   fe.Tag(),
-				"value": fmt.Sprint(fe.Value()),
+			fields = append(fields, fieldError{
+				Field: fe.Field(),
+				Tag:   fe.Tag(),
+				Value: fmt.Sprint(fe.Value()),
 			})
 		}
-		WriteJSON(w, http.StatusBadRequest, map[string]any{
-			"error":  "validation failed",
-			"fields": fields,
+		WriteJSON(w, http.StatusBadRequest, validationErrorResponse{
+			Error:  "validation failed",
+			Fields: fields,
 		})
-		return
-	}
-
-	var inv *validator.InvalidValidationError
-	if errors.As(err, &inv) {
-		WriteError(w, http.StatusBadRequest, "bad request")
 		return
 	}
 

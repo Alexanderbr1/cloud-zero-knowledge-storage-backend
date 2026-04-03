@@ -54,12 +54,22 @@ type TokenPair struct {
 
 func (s *Service) Register(ctx context.Context, email, password string) (TokenPair, error) {
 	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" || password == "" {
+		return TokenPair{}, ErrInvalidInput
+	}
+	if len(password) < 8 {
+		return TokenPair{}, ErrInvalidInput
+	}
+
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("hash password: %w", err)
 	}
 	id := uuid.New()
-	if err := s.Users.CreateUser(ctx, id, email, string(hash)); err != nil {
+	userCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	if err := s.Users.CreateUser(userCtx, id, email, string(hash)); err != nil {
 		var pe *pgconn.PgError
 		if errors.As(err, &pe) && pe.Code == pgerrcode.UniqueViolation {
 			return TokenPair{}, ErrUserExists
@@ -71,7 +81,14 @@ func (s *Service) Register(ctx context.Context, email, password string) (TokenPa
 
 func (s *Service) Login(ctx context.Context, email, password string) (TokenPair, error) {
 	email = strings.TrimSpace(strings.ToLower(email))
-	u, ok, err := s.Users.GetByEmail(ctx, email)
+	if email == "" || password == "" {
+		return TokenPair{}, ErrInvalidInput
+	}
+
+	userCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	u, ok, err := s.Users.GetByEmail(userCtx, email)
 	if err != nil {
 		return TokenPair{}, err
 	}
@@ -86,8 +103,15 @@ func (s *Service) Login(ctx context.Context, email, password string) (TokenPair,
 
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, error) {
 	refreshToken = strings.TrimSpace(refreshToken)
+	if refreshToken == "" {
+		return TokenPair{}, ErrInvalidRefresh
+	}
+
 	hash := refreshTokenHash(refreshToken)
-	_, userID, ok, err := s.Sessions.ConsumeRefreshSession(ctx, hash)
+	sessionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	_, userID, ok, err := s.Sessions.ConsumeRefreshSession(sessionCtx, hash)
 	if err != nil {
 		return TokenPair{}, err
 	}
@@ -104,7 +128,10 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 		return nil
 	}
 	hash := refreshTokenHash(refreshToken)
-	return s.Sessions.RevokeRefreshSessionByHash(ctx, hash)
+	sessionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	return s.Sessions.RevokeRefreshSessionByHash(sessionCtx, hash)
 }
 
 func (s *Service) issueTokenPair(ctx context.Context, userID uuid.UUID) (TokenPair, error) {
@@ -118,7 +145,11 @@ func (s *Service) issueTokenPair(ctx context.Context, userID uuid.UUID) (TokenPa
 	}
 	sessID := uuid.New()
 	expiresAt := time.Now().Add(s.RefreshTTL)
-	if err := s.Sessions.CreateRefreshSession(ctx, sessID, userID, refreshHash, expiresAt); err != nil {
+
+	sessCtx, sessCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer sessCancel()
+
+	if err := s.Sessions.CreateRefreshSession(sessCtx, sessID, userID, refreshHash, expiresAt); err != nil {
 		return TokenPair{}, err
 	}
 	return TokenPair{

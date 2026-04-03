@@ -44,11 +44,10 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 		}
 		restapi.WriteJSON(w, http.StatusOK, dto.StoragePresignPutResponse{
 			BlobID:       out.BlobID.String(),
-			ObjectKey:    out.ObjectKey,
 			UploadURL:    out.UploadURL,
 			ExpiresIn:    out.ExpiresIn,
 			HTTPMethod:   out.HTTPMethod,
-			Instructions: "PUT file bytes to upload_url; Content-Type is not stored server-side (use application/octet-stream if unsure)",
+			Instructions: "PUT file bytes to upload_url; use Content-Type: application/octet-stream",
 		})
 	}
 }
@@ -70,12 +69,10 @@ func storagePresignGet(d Deps) http.HandlerFunc {
 			return
 		}
 		restapi.WriteJSON(w, http.StatusOK, dto.StoragePresignGetResponse{
-			BlobID:       out.BlobID.String(),
-			ObjectKey:    out.ObjectKey,
-			DownloadURL:  out.DownloadURL,
-			ExpiresIn:    out.ExpiresIn,
-			HTTPMethod:   out.HTTPMethod,
-			Instructions: out.Instructions,
+			BlobID:      out.BlobID.String(),
+			DownloadURL: out.DownloadURL,
+			ExpiresIn:   out.ExpiresIn,
+			HTTPMethod:  out.HTTPMethod,
 		})
 	}
 }
@@ -106,20 +103,19 @@ func storageListBlobs(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		items, err := d.Storage.ListBlobs(r.Context(), uid)
+		blobs, err := d.Storage.ListBlobs(r.Context(), uid)
 		if mapStorageErr(w, err) {
 			return
 		}
-		resp := make([]dto.StorageBlobItem, 0, len(items))
-		for _, item := range items {
-			resp = append(resp, dto.StorageBlobItem{
-				BlobID:    item.BlobID.String(),
-				FileName:  item.FileName,
-				ObjectKey: item.ObjectKey,
-				CreatedAt: item.CreatedAt,
+		items := make([]dto.StorageBlobItem, 0, len(blobs))
+		for _, b := range blobs {
+			items = append(items, dto.StorageBlobItem{
+				BlobID:    b.ID.String(),
+				FileName:  b.FileName,
+				CreatedAt: b.CreatedAt,
 			})
 		}
-		restapi.WriteJSON(w, http.StatusOK, dto.StorageListBlobsResponse{Items: resp})
+		restapi.WriteJSON(w, http.StatusOK, dto.StorageListBlobsResponse{Items: items})
 	}
 }
 
@@ -127,10 +123,9 @@ func mapStorageErr(w http.ResponseWriter, err error) bool {
 	if err == nil {
 		return false
 	}
-	switch {
-	case errors.Is(err, storageuc.ErrNotFound):
+	if errors.Is(err, storageuc.ErrNotFound) {
 		restapi.WriteError(w, http.StatusNotFound, "not found")
-	default:
+	} else {
 		restapi.WriteError(w, http.StatusInternalServerError, "internal error")
 	}
 	return true

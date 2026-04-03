@@ -1,19 +1,39 @@
 package v1
 
 import (
+	"context"
+
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"cloud-backend/config"
 	"cloud-backend/internal/controller/restapi"
+	"cloud-backend/internal/entity"
 	authuc "cloud-backend/internal/usecase/auth"
 	storageuc "cloud-backend/internal/usecase/storage"
-	jwtpkg "cloud-backend/pkg/jwt"
 )
 
+// AuthService — бизнес-логика аутентификации (реализует usecase/auth.Service).
+type AuthService interface {
+	Register(ctx context.Context, email, password string) (authuc.TokenPair, error)
+	Login(ctx context.Context, email, password string) (authuc.TokenPair, error)
+	Refresh(ctx context.Context, refreshToken string) (authuc.TokenPair, error)
+	Logout(ctx context.Context, refreshToken string) error
+}
+
+// StorageService — бизнес-логика хранилища (реализует usecase/storage.Service).
+type StorageService interface {
+	PresignPut(ctx context.Context, userID uuid.UUID, fileName string) (*storageuc.PresignPutResult, error)
+	PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*storageuc.PresignGetResult, error)
+	DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error
+	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
+}
+
+// Deps — зависимости v1-роутера; все поля — интерфейсы для тестируемости.
 type Deps struct {
-	Auth          *authuc.Service
-	Tokens        *jwtpkg.Service
-	Storage       *storageuc.Service
+	Auth          AuthService
+	Tokens        restapi.ParseBearerJWT
+	Storage       StorageService
 	RefreshCookie config.RefreshCookieConfig
 }
 

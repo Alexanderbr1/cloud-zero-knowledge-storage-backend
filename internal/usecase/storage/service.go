@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"cloud-backend/internal/entity"
 )
 
 const methodPresign = "presigned_put"
@@ -21,7 +23,7 @@ type Service struct {
 	PresignTTL time.Duration
 }
 
-// PresignPutResult — клиент выполняет PUT по upload_url (тело = файл).
+// PresignPutResult — клиент выполняет PUT по UploadURL (тело = файл).
 type PresignPutResult struct {
 	BlobID     uuid.UUID
 	ObjectKey  string
@@ -30,24 +32,16 @@ type PresignPutResult struct {
 	HTTPMethod string
 }
 
-// PresignGetResult — клиент выполняет GET по download_url (тело = файл).
+// PresignGetResult — клиент выполняет GET по DownloadURL (тело = файл).
 type PresignGetResult struct {
-	BlobID       uuid.UUID
-	ObjectKey    string
-	DownloadURL  string
-	ExpiresIn    int64
-	HTTPMethod   string
-	Instructions string
+	BlobID      uuid.UUID
+	ObjectKey   string
+	DownloadURL string
+	ExpiresIn   int64
+	HTTPMethod  string
 }
 
-type BlobInfo struct {
-	BlobID    uuid.UUID
-	FileName  string
-	ObjectKey string
-	CreatedAt time.Time
-}
-
-// ObjectStore — объектное хранилище S3-совместимое (потребитель: Service).
+// ObjectStore — S3-совместимое объектное хранилище.
 type ObjectStore interface {
 	EnsureBucket(ctx context.Context) error
 	PresignedPutObject(ctx context.Context, objectKey string, expiry time.Duration) (*url.URL, error)
@@ -55,24 +49,28 @@ type ObjectStore interface {
 	RemoveObject(ctx context.Context, objectKey string) error
 }
 
-// BlobRegistry — метаданные загруженных blob'ов (потребитель: Service).
+// BlobRegistry — метаданные blob'ов в БД.
 type BlobRegistry interface {
-	RegisterStoredBlob(ctx context.Context, id, userID uuid.UUID, fileName, objectKey, uploadMethod string) error
-	GetBlobForUser(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error)
-	DeleteBlobRow(ctx context.Context, blobID, userID uuid.UUID) (rowsAffected int64, err error)
-	ListBlobsForUser(ctx context.Context, userID uuid.UUID) ([]BlobInfo, error)
+	RegisterBlob(ctx context.Context, id, userID uuid.UUID, fileName, objectKey, uploadMethod string) error
+	GetBlobObjectKey(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error)
+	// RemoveBlob атомарно удаляет запись и возвращает objectKey для последующего удаления из MinIO.
+	RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error)
+	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
 }
 
-// PresignPut создаёт запись и presigned PUT; ключ в бакете: blobs/<user_id>/<blob_id>.
+// PresignPut создаёт запись и presigned PUT URL; ключ в бакете: blobs/<user_id>/<blob_id>.
 func (s *Service) PresignPut(ctx context.Context, userID uuid.UUID, fileName string) (*PresignPutResult, error) {
 	if userID == uuid.Nil {
 		return nil, fmt.Errorf("presign put: empty user")
 	}
 	blobID := uuid.New()
 	cleanName := sanitizeFileName(fileName)
-	objectKey := fmt.Sprintf("blobs/%s/%s", userID.String(), blobID.String())
+	objectKey := fmt.Sprintf("blobs/%s/%s", userID, blobID)
 
-	if err := s.Blobs.RegisterStoredBlob(ctx, blobID, userID, cleanName, objectKey, methodPresign); err != nil {
+	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer dbCancel()
+
+	if err := s.Blobs.RegisterBlob(dbCtx, blobID, userID, cleanName, objectKey, methodPresign); err != nil {
 		return nil, fmt.Errorf("register blob: %w", err)
 	}
 
@@ -90,22 +88,11 @@ func (s *Service) PresignPut(ctx context.Context, userID uuid.UUID, fileName str
 	}, nil
 }
 
-func sanitizeFileName(fileName string) string {
-	name := strings.TrimSpace(fileName)
-	if name == "" {
-		return "file.bin"
-	}
-	name = filepath.Base(name)
-	name = strings.ReplaceAll(name, "/", "_")
-	name = strings.ReplaceAll(name, "\\", "_")
-	if name == "." || name == ".." || name == "" {
-		return "file.bin"
-	}
-	return name
-}
-
 func (s *Service) PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*PresignGetResult, error) {
-	objectKey, ok, err := s.Blobs.GetBlobForUser(ctx, blobID, userID)
+	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer dbCancel()
+
+	objectKey, ok, err := s.Blobs.GetBlobObjectKey(dbCtx, blobID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("get blob: %w", err)
 	}
@@ -119,36 +106,56 @@ func (s *Service) PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*Pr
 	}
 
 	return &PresignGetResult{
-		BlobID:       blobID,
-		ObjectKey:    objectKey,
-		DownloadURL:  u.String(),
-		ExpiresIn:    int64(s.PresignTTL.Seconds()),
-		HTTPMethod:   "GET",
-		Instructions: "GET download_url; object is opaque bytes (client-side crypto / type is local only)",
+		BlobID:      blobID,
+		ObjectKey:   objectKey,
+		DownloadURL: u.String(),
+		ExpiresIn:   int64(s.PresignTTL.Seconds()),
+		HTTPMethod:  "GET",
 	}, nil
 }
 
+// DeleteBlob атомарно удаляет запись в БД (DELETE RETURNING), затем объект из MinIO.
+// Если запись отсутствует — возвращает ErrNotFound без обращения к MinIO.
+// Если объект в MinIO уже отсутствует — операция идемпотентна.
 func (s *Service) DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error {
-	objectKey, ok, err := s.Blobs.GetBlobForUser(ctx, blobID, userID)
+	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer dbCancel()
+
+	objectKey, ok, err := s.Blobs.RemoveBlob(dbCtx, blobID, userID)
 	if err != nil {
-		return fmt.Errorf("get blob: %w", err)
+		return fmt.Errorf("remove blob record: %w", err)
 	}
 	if !ok {
 		return ErrNotFound
 	}
+
 	if err := s.Objects.RemoveObject(ctx, objectKey); err != nil {
 		return fmt.Errorf("remove object: %w", err)
-	}
-	if _, err := s.Blobs.DeleteBlobRow(ctx, blobID, userID); err != nil {
-		return fmt.Errorf("delete blob row: %w", err)
 	}
 	return nil
 }
 
-func (s *Service) ListBlobs(ctx context.Context, userID uuid.UUID) ([]BlobInfo, error) {
-	items, err := s.Blobs.ListBlobsForUser(ctx, userID)
+func (s *Service) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error) {
+	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer dbCancel()
+
+	blobs, err := s.Blobs.ListBlobs(dbCtx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list blobs: %w", err)
 	}
-	return items, nil
+	return blobs, nil
+}
+
+func sanitizeFileName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "file.bin"
+	}
+	name = filepath.Base(name)
+	name = strings.ReplaceAll(name, "/", "_")
+	name = strings.ReplaceAll(name, "\\", "_")
+	if name == "." || name == ".." || name == "" {
+		return "file.bin"
+	}
+	return name
 }

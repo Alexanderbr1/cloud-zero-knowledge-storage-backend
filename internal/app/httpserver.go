@@ -9,16 +9,16 @@ import (
 	v1 "cloud-backend/internal/controller/restapi/v1"
 )
 
-// newHTTPHandler собирает chi-router для REST (delivery), как router в go-clean-template.
-func newHTTPHandler(apiV1 v1.Deps) http.Handler {
+// newHTTPHandler собирает chi-роутер с глобальными middleware.
+// Глобальный Timeout не задаётся: загрузки blob'ов длинные; лимиты — http.Server + /storage Timeout.
+func newHTTPHandler(deps v1.Deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
-	// Не задаём глобальный Timeout: загрузка blob'ов может быть долгой; лимиты — http.Server + /storage Timeout.
 	r.Use(middleware.Logger)
 	r.Route("/v1", func(r chi.Router) {
-		r.Mount("/", v1.NewRouter(apiV1))
+		r.Mount("/", v1.NewRouter(deps))
 	})
 	return r
 }

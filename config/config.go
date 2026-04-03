@@ -1,14 +1,16 @@
-// Package config — конфигурация из env (twelve-factor), как в go-clean-template.
+// Package config — конфигурация приложения из переменных окружения (twelve-factor).
 package config
 
 import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
+// Config — конфигурация приложения.
 type Config struct {
 	HTTPAddr string
 
@@ -18,16 +20,29 @@ type Config struct {
 
 	LogLevel string
 
-	JWT JWTConfig
-
-	// RefreshCookie — имя и атрибуты HttpOnly-куки с refresh-токеном.
+	Server        ServerConfig
+	JWT           JWTConfig
 	RefreshCookie RefreshCookieConfig
-
-	// MinIO — объектное хранилище (пустой Endpoint = API загрузки не подключается).
-	MinIO MinIOConfig
+	MinIO         MinIOConfig
 }
 
-// RefreshCookieConfig — кука refresh_token (HttpOnly + Secure при HTTPS).
+// ServerConfig — таймауты HTTP-сервера.
+type ServerConfig struct {
+	ReadTimeout     time.Duration // HTTP_READ_TIMEOUT (default: 35m — даёт запас для крупных ответов)
+	WriteTimeout    time.Duration // HTTP_WRITE_TIMEOUT (default: 35m)
+	IdleTimeout     time.Duration // HTTP_IDLE_TIMEOUT (default: 120s)
+	ShutdownTimeout time.Duration // HTTP_SHUTDOWN_TIMEOUT (default: 10s)
+}
+
+// JWTConfig — параметры JWT и refresh-токенов.
+type JWTConfig struct {
+	// Secret — ключ подписи HS256. Минимум 32 символа (256 бит).
+	Secret     string
+	AccessTTL  time.Duration
+	RefreshTTL time.Duration
+}
+
+// RefreshCookieConfig — атрибуты HttpOnly-куки с refresh-токеном.
 type RefreshCookieConfig struct {
 	Name     string
 	Path     string
@@ -36,13 +51,7 @@ type RefreshCookieConfig struct {
 	SameSite http.SameSite
 }
 
-type JWTConfig struct {
-	Secret     string
-	AccessTTL  time.Duration
-	RefreshTTL time.Duration
-}
-
-// MinIOConfig — S3-совместимое API (MinIO / AWS S3).
+// MinIOConfig — S3-совместимое объектное хранилище.
 type MinIOConfig struct {
 	Endpoint       string
 	PublicEndpoint string
@@ -51,96 +60,159 @@ type MinIOConfig struct {
 	Bucket         string
 	UseSSL         bool
 	Region         string
-
-	PresignTTL time.Duration
+	PresignTTL     time.Duration
 }
 
-// Load читает конфигурацию из переменных окружения и возвращает ошибку, если обязательные значения отсутствуют.
+// Load читает конфигурацию из env и возвращает сразу все ошибки валидации.
 func Load() (Config, error) {
-	cfg := Config{
-		HTTPAddr:    envString("HTTP_ADDR", ":8080"),
-		DatabaseURL: os.Getenv("DATABASE_URL"),
-		DBInit:      envBool("DB_INIT", false),
-		MigrateOnly: envBool("MIGRATE_ONLY", false),
-		LogLevel:    envString("LOG_LEVEL", "info"),
-		JWT: JWTConfig{
-			Secret:     envString("JWT_SECRET", ""),
-			AccessTTL:  envDuration("JWT_ACCESS_TTL", 15*time.Minute),
-			RefreshTTL: envDuration("JWT_REFRESH_TTL", 30*24*time.Hour),
-		},
-		RefreshCookie: RefreshCookieConfig{
-			Name:     envString("REFRESH_COOKIE_NAME", "refresh_token"),
-			Path:     envString("REFRESH_COOKIE_PATH", "/"),
-			Domain:   envString("REFRESH_COOKIE_DOMAIN", ""),
-			Secure:   envBool("REFRESH_COOKIE_SECURE", false),
-			SameSite: parseSameSite(envString("REFRESH_COOKIE_SAMESITE", "lax")),
-		},
-		MinIO: MinIOConfig{
-			Endpoint:       envString("MINIO_ENDPOINT", ""),
-			PublicEndpoint: envString("MINIO_PUBLIC_ENDPOINT", ""),
-			AccessKey:      envString("MINIO_ACCESS_KEY", ""),
-			SecretKey:      envString("MINIO_SECRET_KEY", ""),
-			Bucket:         envString("MINIO_BUCKET", "blobs"),
-			UseSSL:         envBool("MINIO_USE_SSL", false),
-			Region:         envString("MINIO_REGION", "us-east-1"),
-			PresignTTL:     envDuration("MINIO_PRESIGN_TTL", time.Hour),
-		},
+	l := &loader{}
+	cfg := l.build()
+	if len(l.errs) > 0 {
+		return Config{}, fmt.Errorf("invalid configuration:\n  - %s", strings.Join(l.errs, "\n  - "))
 	}
-
-	if cfg.DatabaseURL == "" {
-		return Config{}, fmt.Errorf("DATABASE_URL is required")
-	}
-	if cfg.JWT.Secret == "" {
-		return Config{}, fmt.Errorf("JWT_SECRET is required")
-	}
-	if cfg.RefreshCookie.SameSite == http.SameSiteNoneMode && !cfg.RefreshCookie.Secure {
-		return Config{}, fmt.Errorf("REFRESH_COOKIE_SAMESITE=none requires REFRESH_COOKIE_SECURE=true")
-	}
-
-	if cfg.MinIO.Endpoint != "" {
-		if cfg.MinIO.AccessKey == "" || cfg.MinIO.SecretKey == "" {
-			return Config{}, fmt.Errorf("MINIO_ACCESS_KEY and MINIO_SECRET_KEY are required when MINIO_ENDPOINT is set")
-		}
-	}
-
 	return cfg, nil
 }
 
-func parseSameSite(s string) http.SameSite {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "strict":
-		return http.SameSiteStrictMode
-	case "none":
-		return http.SameSiteNoneMode
-	default:
-		return http.SameSiteLaxMode
+// loader накапливает ошибки конфигурации и не останавливается на первой.
+type loader struct {
+	errs []string
+}
+
+func (l *loader) build() Config {
+	return Config{
+		HTTPAddr:      envStr("HTTP_ADDR", ":8080"),
+		DatabaseURL:   l.requireStr("DATABASE_URL"),
+		DBInit:        envBool("DB_INIT", false),
+		MigrateOnly:   envBool("MIGRATE_ONLY", false),
+		LogLevel:      envStr("LOG_LEVEL", "info"),
+		Server:        l.buildServer(),
+		JWT:           l.buildJWT(),
+		RefreshCookie: l.buildRefreshCookie(),
+		MinIO:         l.buildMinIO(),
 	}
 }
 
-func envString(key, def string) string {
+func (l *loader) buildServer() ServerConfig {
+	return ServerConfig{
+		ReadTimeout:     l.requirePosDuration("HTTP_READ_TIMEOUT", 35*time.Minute),
+		WriteTimeout:    l.requirePosDuration("HTTP_WRITE_TIMEOUT", 35*time.Minute),
+		IdleTimeout:     l.requirePosDuration("HTTP_IDLE_TIMEOUT", 120*time.Second),
+		ShutdownTimeout: l.requirePosDuration("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second),
+	}
+}
+
+func (l *loader) buildJWT() JWTConfig {
+	secret := l.requireStr("JWT_SECRET")
+	if secret != "" && len(secret) < 32 {
+		l.errs = append(l.errs, "JWT_SECRET: must be at least 32 characters (HS256 requires 256-bit key)")
+	}
+	return JWTConfig{
+		Secret:     secret,
+		AccessTTL:  l.requirePosDuration("JWT_ACCESS_TTL", 15*time.Minute),
+		RefreshTTL: l.requirePosDuration("JWT_REFRESH_TTL", 30*24*time.Hour),
+	}
+}
+
+func (l *loader) buildRefreshCookie() RefreshCookieConfig {
+	sameSite, err := parseSameSite(envStr("REFRESH_COOKIE_SAMESITE", "lax"))
+	if err != nil {
+		l.errs = append(l.errs, "REFRESH_COOKIE_SAMESITE: "+err.Error())
+		sameSite = http.SameSiteLaxMode
+	}
+	secure := envBool("REFRESH_COOKIE_SECURE", false)
+	if sameSite == http.SameSiteNoneMode && !secure {
+		l.errs = append(l.errs, "REFRESH_COOKIE_SAMESITE=none requires REFRESH_COOKIE_SECURE=true")
+	}
+	return RefreshCookieConfig{
+		Name:     envStr("REFRESH_COOKIE_NAME", "refresh_token"),
+		Path:     envStr("REFRESH_COOKIE_PATH", "/"),
+		Domain:   envStr("REFRESH_COOKIE_DOMAIN", ""),
+		Secure:   secure,
+		SameSite: sameSite,
+	}
+}
+
+func (l *loader) buildMinIO() MinIOConfig {
+	endpoint := envStr("MINIO_ENDPOINT", "")
+	if endpoint != "" {
+		if envStr("MINIO_ACCESS_KEY", "") == "" {
+			l.errs = append(l.errs, "MINIO_ACCESS_KEY: required when MINIO_ENDPOINT is set")
+		}
+		if envStr("MINIO_SECRET_KEY", "") == "" {
+			l.errs = append(l.errs, "MINIO_SECRET_KEY: required when MINIO_ENDPOINT is set")
+		}
+	}
+	return MinIOConfig{
+		Endpoint:       endpoint,
+		PublicEndpoint: envStr("MINIO_PUBLIC_ENDPOINT", ""),
+		AccessKey:      envStr("MINIO_ACCESS_KEY", ""),
+		SecretKey:      envStr("MINIO_SECRET_KEY", ""),
+		Bucket:         envStr("MINIO_BUCKET", "blobs"),
+		UseSSL:         envBool("MINIO_USE_SSL", false),
+		Region:         envStr("MINIO_REGION", "us-east-1"),
+		PresignTTL:     l.requirePosDuration("MINIO_PRESIGN_TTL", time.Hour),
+	}
+}
+
+// requireStr добавляет ошибку, если переменная не задана или пуста.
+func (l *loader) requireStr(key string) string {
+	v := envStr(key, "")
+	if v == "" {
+		l.errs = append(l.errs, key+": required")
+	}
+	return v
+}
+
+// requirePosDuration возвращает duration ≥ 0 или добавляет ошибку при невалидном / неположительном значении.
+func (l *loader) requirePosDuration(key string, def time.Duration) time.Duration {
+	raw, ok := os.LookupEnv(key)
+	if !ok || raw == "" {
+		return def
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		l.errs = append(l.errs, fmt.Sprintf("%s: invalid duration %q: %v", key, raw, err))
+		return def
+	}
+	if d <= 0 {
+		l.errs = append(l.errs, fmt.Sprintf("%s: must be positive, got %q", key, raw))
+		return def
+	}
+	return d
+}
+
+// envStr читает строковую переменную окружения или возвращает def.
+func envStr(key, def string) string {
 	if v, ok := os.LookupEnv(key); ok {
 		return v
 	}
 	return def
 }
 
+// envBool читает булеву переменную окружения (1/0, true/false, t/f и т.д.).
+// При невалидном значении молча возвращает def — булевы флаги не критичны.
 func envBool(key string, def bool) bool {
-	if v, ok := os.LookupEnv(key); ok {
-		switch v {
-		case "1", "true", "TRUE", "True":
-			return true
-		case "0", "false", "FALSE", "False":
-			return false
-		}
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def
 	}
-	return def
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return b
 }
 
-func envDuration(key string, def time.Duration) time.Duration {
-	if v, ok := os.LookupEnv(key); ok {
-		if d, err := time.ParseDuration(v); err == nil {
-			return d
-		}
+// parseSameSite преобразует строку в http.SameSite и возвращает ошибку для неизвестных значений.
+func parseSameSite(s string) (http.SameSite, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "strict":
+		return http.SameSiteStrictMode, nil
+	case "lax":
+		return http.SameSiteLaxMode, nil
+	case "none":
+		return http.SameSiteNoneMode, nil
+	default:
+		return http.SameSiteLaxMode, fmt.Errorf("unknown value %q; valid values: strict, lax, none", s)
 	}
-	return def
 }
