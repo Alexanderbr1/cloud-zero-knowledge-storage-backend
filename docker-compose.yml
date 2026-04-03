@@ -57,7 +57,7 @@ services:
       MIGRATE_ONLY: "true"
       DB_INIT: "true"
       DATABASE_URL: postgres://cloud:cloudpass@postgres:5432/cloud?sslmode=disable
-      JWT_SECRET: dev-jwt-secret-change-me
+      JWT_SECRET: dev-jwt-secret-min-32-chars-required
     volumes:
       - app-data:/data
     restart: "no"
@@ -78,7 +78,7 @@ services:
       LOG_LEVEL: info
       DB_INIT: "false"
       DATABASE_URL: postgres://cloud:cloudpass@postgres:5432/cloud?sslmode=disable
-      JWT_SECRET: dev-jwt-secret-change-me
+      JWT_SECRET: dev-jwt-secret-min-32-chars-required
       MINIO_ENDPOINT: minio:9000
       MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-http://localhost:9000}
       MINIO_ACCESS_KEY: minioadmin

@@ -79,16 +79,17 @@ type loader struct {
 }
 
 func (l *loader) build() Config {
+	migrateOnly := envBool("MIGRATE_ONLY", false)
 	return Config{
 		HTTPAddr:      envStr("HTTP_ADDR", ":8080"),
 		DatabaseURL:   l.requireStr("DATABASE_URL"),
 		DBInit:        envBool("DB_INIT", false),
-		MigrateOnly:   envBool("MIGRATE_ONLY", false),
+		MigrateOnly:   migrateOnly,
 		LogLevel:      envStr("LOG_LEVEL", "info"),
 		Server:        l.buildServer(),
 		JWT:           l.buildJWT(),
 		RefreshCookie: l.buildRefreshCookie(),
-		MinIO:         l.buildMinIO(),
+		MinIO:         l.buildMinIO(!migrateOnly),
 	}
 }
 
@@ -132,7 +133,11 @@ func (l *loader) buildRefreshCookie() RefreshCookieConfig {
 	}
 }
 
-func (l *loader) buildMinIO() MinIOConfig {
+// buildMinIO парсит MinIO; при needCredentials=false (только миграции) поля не трогаем — до wireDeps не дойдут.
+func (l *loader) buildMinIO(needCredentials bool) MinIOConfig {
+	if !needCredentials {
+		return MinIOConfig{}
+	}
 	return MinIOConfig{
 		Endpoint:       l.requireStr("MINIO_ENDPOINT"),
 		PublicEndpoint: envStr("MINIO_PUBLIC_ENDPOINT", ""),
