@@ -13,30 +13,37 @@ import (
 
 var _ storageuc.BlobRegistry = (*Storage)(nil)
 
-func (s *Storage) RegisterBlob(ctx context.Context, id, userID uuid.UUID, fileName, objectKey, uploadMethod string) error {
+func (s *Storage) RegisterBlob(
+	ctx context.Context,
+	id, userID uuid.UUID,
+	fileName, objectKey, uploadMethod string,
+	encryptedFileKey, fileIV []byte,
+) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO stored_blobs (id, user_id, file_name, object_key, upload_method)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		id, userID, fileName, objectKey, uploadMethod,
+		`INSERT INTO stored_blobs (id, user_id, file_name, object_key, upload_method, encrypted_file_key, file_iv)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		id, userID, fileName, objectKey, uploadMethod, encryptedFileKey, fileIV,
 	)
 	return err
 }
 
-func (s *Storage) GetBlobObjectKey(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error) {
-	err = s.pool.QueryRow(ctx,
-		`SELECT object_key FROM stored_blobs WHERE id = $1 AND user_id = $2`,
+func (s *Storage) GetBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (storageuc.BlobMeta, bool, error) {
+	var m storageuc.BlobMeta
+	err := s.pool.QueryRow(ctx,
+		`SELECT object_key, encrypted_file_key, file_iv
+		 FROM stored_blobs WHERE id = $1 AND user_id = $2`,
 		blobID, userID,
-	).Scan(&objectKey)
+	).Scan(&m.ObjectKey, &m.EncryptedFileKey, &m.FileIV)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", false, nil
+		return storageuc.BlobMeta{}, false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return storageuc.BlobMeta{}, false, err
 	}
-	return objectKey, true, nil
+	return m, true, nil
 }
 
-// RemoveBlob атомарно удаляет запись и возвращает objectKey — без отдельного SELECT.
+// RemoveBlob атомарно удаляет запись и возвращает objectKey для последующего удаления из MinIO.
 func (s *Storage) RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error) {
 	err = s.pool.QueryRow(ctx,
 		`DELETE FROM stored_blobs WHERE id = $1 AND user_id = $2 RETURNING object_key`,
@@ -53,7 +60,7 @@ func (s *Storage) RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (obj
 
 func (s *Storage) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, file_name, object_key, created_at
+		`SELECT id, file_name, object_key, created_at, encrypted_file_key, file_iv
 		 FROM stored_blobs
 		 WHERE user_id = $1
 		 ORDER BY created_at DESC`,
@@ -67,7 +74,7 @@ func (s *Storage) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blo
 	var out []entity.Blob
 	for rows.Next() {
 		b := entity.Blob{UserID: userID}
-		if err := rows.Scan(&b.ID, &b.FileName, &b.ObjectKey, &b.CreatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.FileName, &b.ObjectKey, &b.CreatedAt, &b.EncryptedFileKey, &b.FileIV); err != nil {
 			return nil, err
 		}
 		out = append(out, b)

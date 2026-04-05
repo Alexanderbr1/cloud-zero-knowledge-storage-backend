@@ -15,15 +15,16 @@ import (
 
 // AuthService — бизнес-логика аутентификации (реализует usecase/auth.Service).
 type AuthService interface {
-	Register(ctx context.Context, email, password string) (authuc.TokenPair, error)
+	Register(ctx context.Context, email, password string, cryptoSalt []byte) (authuc.TokenPair, error)
 	Login(ctx context.Context, email, password string) (authuc.TokenPair, error)
 	Refresh(ctx context.Context, refreshToken string) (authuc.TokenPair, error)
 	Logout(ctx context.Context, refreshToken string) error
+	GetCryptoParams(ctx context.Context, email string) (cryptoSalt []byte, ok bool, err error)
 }
 
 // StorageService — бизнес-логика хранилища (реализует usecase/storage.Service).
 type StorageService interface {
-	PresignPut(ctx context.Context, userID uuid.UUID, fileName string) (*storageuc.PresignPutResult, error)
+	PresignPut(ctx context.Context, userID uuid.UUID, fileName string, encryptedFileKey, fileIV []byte) (*storageuc.PresignPutResult, error)
 	PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*storageuc.PresignGetResult, error)
 	DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error
 	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
@@ -41,6 +42,7 @@ func NewRouter(d Deps) chi.Router {
 	r := chi.NewRouter()
 
 	r.Route("/auth", func(r chi.Router) {
+		r.Get("/crypto-params", getCryptoParams(d)) // публичный, до логина
 		r.Post("/register", register(d))
 		r.Post("/login", login(d))
 		r.Post("/refresh", refresh(d))

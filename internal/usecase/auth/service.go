@@ -20,7 +20,7 @@ import (
 
 // UserRepository — доступ к пользователям в БД.
 type UserRepository interface {
-	CreateUser(ctx context.Context, id uuid.UUID, email, passwordHash string) error
+	CreateUser(ctx context.Context, id uuid.UUID, email, passwordHash string, cryptoSalt []byte) error
 	GetByEmail(ctx context.Context, email string) (entity.User, bool, error)
 }
 
@@ -52,7 +52,7 @@ type TokenPair struct {
 	RefreshExpiresIn int64
 }
 
-func (s *Service) Register(ctx context.Context, email, password string) (TokenPair, error) {
+func (s *Service) Register(ctx context.Context, email, password string, cryptoSalt []byte) (TokenPair, error) {
 	email = strings.TrimSpace(strings.ToLower(email))
 	if email == "" || password == "" {
 		return TokenPair{}, ErrInvalidInput
@@ -69,7 +69,7 @@ func (s *Service) Register(ctx context.Context, email, password string) (TokenPa
 	userCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	if err := s.Users.CreateUser(userCtx, id, email, string(hash)); err != nil {
+	if err := s.Users.CreateUser(userCtx, id, email, string(hash), cryptoSalt); err != nil {
 		var pe *pgconn.PgError
 		if errors.As(err, &pe) && pe.Code == pgerrcode.UniqueViolation {
 			return TokenPair{}, ErrUserExists
@@ -77,6 +77,25 @@ func (s *Service) Register(ctx context.Context, email, password string) (TokenPa
 		return TokenPair{}, err
 	}
 	return s.issueTokenPair(ctx, id)
+}
+
+// GetCryptoParams возвращает crypto_salt пользователя по email (публичный endpoint, до логина).
+func (s *Service) GetCryptoParams(ctx context.Context, email string) (cryptoSalt []byte, ok bool, err error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" {
+		return nil, false, ErrInvalidInput
+	}
+	userCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	u, found, err := s.Users.GetByEmail(userCtx, email)
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+	return u.CryptoSalt, true, nil
 }
 
 func (s *Service) Login(ctx context.Context, email, password string) (TokenPair, error) {

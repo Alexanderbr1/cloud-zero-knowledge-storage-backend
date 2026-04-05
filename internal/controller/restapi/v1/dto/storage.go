@@ -3,7 +3,9 @@ package dto
 import "time"
 
 type StoragePresignPutRequest struct {
-	FileName string `json:"file_name" validate:"required,max=512"`
+	FileName         string `json:"file_name"          validate:"required,max=512"`
+	EncryptedFileKey string `json:"encrypted_file_key" validate:"required"`
+	FileIV           string `json:"file_iv"            validate:"required"`
 }
 
 type StoragePresignPutResponse struct {
@@ -15,16 +17,20 @@ type StoragePresignPutResponse struct {
 }
 
 type StoragePresignGetResponse struct {
-	BlobID      string `json:"blob_id"`
-	DownloadURL string `json:"download_url"`
-	ExpiresIn   int64  `json:"expires_in"`
-	HTTPMethod  string `json:"http_method"`
+	BlobID           string `json:"blob_id"`
+	DownloadURL      string `json:"download_url"`
+	ExpiresIn        int64  `json:"expires_in"`
+	HTTPMethod       string `json:"http_method"`
+	EncryptedFileKey string `json:"encrypted_file_key"`
+	FileIV           string `json:"file_iv"`
 }
 
 type StorageBlobItem struct {
-	BlobID    string    `json:"blob_id"`
-	FileName  string    `json:"file_name"`
-	CreatedAt time.Time `json:"created_at"`
+	BlobID           string    `json:"blob_id"`
+	FileName         string    `json:"file_name"`
+	CreatedAt        time.Time `json:"created_at"`
+	EncryptedFileKey string    `json:"encrypted_file_key"`
+	FileIV           string    `json:"file_iv"`
 }
 
 type StorageListBlobsResponse struct {

@@ -34,11 +34,20 @@ type PresignPutResult struct {
 
 // PresignGetResult — клиент выполняет GET по DownloadURL (тело = файл).
 type PresignGetResult struct {
-	BlobID      uuid.UUID
-	ObjectKey   string
-	DownloadURL string
-	ExpiresIn   int64
-	HTTPMethod  string
+	BlobID           uuid.UUID
+	ObjectKey        string
+	DownloadURL      string
+	ExpiresIn        int64
+	HTTPMethod       string
+	EncryptedFileKey []byte
+	FileIV           []byte
+}
+
+// BlobMeta — объектный ключ и крипто-поля blob'а.
+type BlobMeta struct {
+	ObjectKey        string
+	EncryptedFileKey []byte
+	FileIV           []byte
 }
 
 // ObjectStore — S3-совместимое объектное хранилище.
@@ -51,15 +60,15 @@ type ObjectStore interface {
 
 // BlobRegistry — метаданные blob'ов в БД.
 type BlobRegistry interface {
-	RegisterBlob(ctx context.Context, id, userID uuid.UUID, fileName, objectKey, uploadMethod string) error
-	GetBlobObjectKey(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error)
+	RegisterBlob(ctx context.Context, id, userID uuid.UUID, fileName, objectKey, uploadMethod string, encryptedFileKey, fileIV []byte) error
+	GetBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (BlobMeta, bool, error)
 	// RemoveBlob атомарно удаляет запись и возвращает objectKey для последующего удаления из MinIO.
 	RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error)
 	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
 }
 
 // PresignPut создаёт запись и presigned PUT URL; ключ в бакете: blobs/<user_id>/<blob_id>.
-func (s *Service) PresignPut(ctx context.Context, userID uuid.UUID, fileName string) (*PresignPutResult, error) {
+func (s *Service) PresignPut(ctx context.Context, userID uuid.UUID, fileName string, encryptedFileKey, fileIV []byte) (*PresignPutResult, error) {
 	if userID == uuid.Nil {
 		return nil, fmt.Errorf("presign put: empty user")
 	}
@@ -70,7 +79,7 @@ func (s *Service) PresignPut(ctx context.Context, userID uuid.UUID, fileName str
 	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer dbCancel()
 
-	if err := s.Blobs.RegisterBlob(dbCtx, blobID, userID, cleanName, objectKey, methodPresign); err != nil {
+	if err := s.Blobs.RegisterBlob(dbCtx, blobID, userID, cleanName, objectKey, methodPresign, encryptedFileKey, fileIV); err != nil {
 		return nil, fmt.Errorf("register blob: %w", err)
 	}
 
@@ -92,7 +101,7 @@ func (s *Service) PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*Pr
 	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer dbCancel()
 
-	objectKey, ok, err := s.Blobs.GetBlobObjectKey(dbCtx, blobID, userID)
+	meta, ok, err := s.Blobs.GetBlobMeta(dbCtx, blobID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("get blob: %w", err)
 	}
@@ -100,17 +109,19 @@ func (s *Service) PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*Pr
 		return nil, ErrNotFound
 	}
 
-	u, err := s.Objects.PresignedGetObject(ctx, objectKey, s.PresignTTL)
+	u, err := s.Objects.PresignedGetObject(ctx, meta.ObjectKey, s.PresignTTL)
 	if err != nil {
 		return nil, fmt.Errorf("presign get: %w", err)
 	}
 
 	return &PresignGetResult{
-		BlobID:      blobID,
-		ObjectKey:   objectKey,
-		DownloadURL: u.String(),
-		ExpiresIn:   int64(s.PresignTTL.Seconds()),
-		HTTPMethod:  "GET",
+		BlobID:           blobID,
+		ObjectKey:        meta.ObjectKey,
+		DownloadURL:      u.String(),
+		ExpiresIn:        int64(s.PresignTTL.Seconds()),
+		HTTPMethod:       "GET",
+		EncryptedFileKey: meta.EncryptedFileKey,
+		FileIV:           meta.FileIV,
 	}, nil
 }
 

@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"time"
@@ -38,7 +39,17 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 			restapi.WriteValidationError(w, err)
 			return
 		}
-		out, err := d.Storage.PresignPut(r.Context(), uid, in.FileName)
+		encryptedFileKey, err := base64.StdEncoding.DecodeString(in.EncryptedFileKey)
+		if err != nil {
+			restapi.WriteError(w, http.StatusBadRequest, "invalid encrypted_file_key")
+			return
+		}
+		fileIV, err := base64.StdEncoding.DecodeString(in.FileIV)
+		if err != nil {
+			restapi.WriteError(w, http.StatusBadRequest, "invalid file_iv")
+			return
+		}
+		out, err := d.Storage.PresignPut(r.Context(), uid, in.FileName, encryptedFileKey, fileIV)
 		if mapStorageErr(w, err) {
 			return
 		}
@@ -47,7 +58,7 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 			UploadURL:    out.UploadURL,
 			ExpiresIn:    out.ExpiresIn,
 			HTTPMethod:   out.HTTPMethod,
-			Instructions: "PUT file bytes to upload_url; use Content-Type: application/octet-stream",
+			Instructions: "PUT encrypted file bytes to upload_url; use Content-Type: application/octet-stream",
 		})
 	}
 }
@@ -69,10 +80,12 @@ func storagePresignGet(d Deps) http.HandlerFunc {
 			return
 		}
 		restapi.WriteJSON(w, http.StatusOK, dto.StoragePresignGetResponse{
-			BlobID:      out.BlobID.String(),
-			DownloadURL: out.DownloadURL,
-			ExpiresIn:   out.ExpiresIn,
-			HTTPMethod:  out.HTTPMethod,
+			BlobID:           out.BlobID.String(),
+			DownloadURL:      out.DownloadURL,
+			ExpiresIn:        out.ExpiresIn,
+			HTTPMethod:       out.HTTPMethod,
+			EncryptedFileKey: base64.StdEncoding.EncodeToString(out.EncryptedFileKey),
+			FileIV:           base64.StdEncoding.EncodeToString(out.FileIV),
 		})
 	}
 }
@@ -110,9 +123,11 @@ func storageListBlobs(d Deps) http.HandlerFunc {
 		items := make([]dto.StorageBlobItem, 0, len(blobs))
 		for _, b := range blobs {
 			items = append(items, dto.StorageBlobItem{
-				BlobID:    b.ID.String(),
-				FileName:  b.FileName,
-				CreatedAt: b.CreatedAt,
+				BlobID:           b.ID.String(),
+				FileName:         b.FileName,
+				CreatedAt:        b.CreatedAt,
+				EncryptedFileKey: base64.StdEncoding.EncodeToString(b.EncryptedFileKey),
+				FileIV:           base64.StdEncoding.EncodeToString(b.FileIV),
 			})
 		}
 		restapi.WriteJSON(w, http.StatusOK, dto.StorageListBlobsResponse{Items: items})

@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/http"
 
@@ -23,7 +24,12 @@ func register(d Deps) http.HandlerFunc {
 			restapi.WriteValidationError(w, err)
 			return
 		}
-		out, err := d.Auth.Register(r.Context(), in.Email, in.Password)
+		cryptoSalt, err := base64.StdEncoding.DecodeString(in.CryptoSalt)
+		if err != nil || len(cryptoSalt) == 0 {
+			restapi.WriteError(w, http.StatusBadRequest, "invalid crypto_salt")
+			return
+		}
+		out, err := d.Auth.Register(r.Context(), in.Email, in.Password, cryptoSalt)
 		if err != nil {
 			writeAuthErr(w, err)
 			return
@@ -78,6 +84,30 @@ func logout(d Deps) http.HandlerFunc {
 		_ = d.Auth.Logout(r.Context(), rt)
 		clearRefreshTokenCookie(w, d.RefreshCookie)
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// getCryptoParams — публичный endpoint (не требует авторизации).
+// Возвращает crypto_salt пользователя по email для деривации мастер-ключа до логина.
+func getCryptoParams(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		email := r.URL.Query().Get("email")
+		if email == "" {
+			restapi.WriteError(w, http.StatusBadRequest, "email required")
+			return
+		}
+		salt, ok, err := d.Auth.GetCryptoParams(r.Context(), email)
+		if err != nil {
+			writeAuthErr(w, err)
+			return
+		}
+		if !ok || len(salt) == 0 {
+			restapi.WriteError(w, http.StatusNotFound, "not found")
+			return
+		}
+		restapi.WriteJSON(w, http.StatusOK, dto.CryptoParamsResponse{
+			CryptoSalt: base64.StdEncoding.EncodeToString(salt),
+		})
 	}
 }
 
