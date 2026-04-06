@@ -11,6 +11,7 @@ type Blob struct {
 	ID               uuid.UUID
 	UserID           uuid.UUID
 	FileName         string
+	ContentType      string
 	ObjectKey        string
 	CreatedAt        time.Time
 	EncryptedFileKey []byte // AES-KW обёрнутый файловый ключ; nil у незашифрованных файлов

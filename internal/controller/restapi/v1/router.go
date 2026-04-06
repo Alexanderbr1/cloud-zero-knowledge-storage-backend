@@ -23,7 +23,7 @@ type AuthService interface {
 
 // StorageService — бизнес-логика хранилища (реализует usecase/storage.Service).
 type StorageService interface {
-	PresignPut(ctx context.Context, userID uuid.UUID, fileName string, encryptedFileKey, fileIV []byte) (*storageuc.PresignPutResult, error)
+	PresignPut(ctx context.Context, userID uuid.UUID, fileName, contentType string, encryptedFileKey, fileIV []byte) (*storageuc.PresignPutResult, error)
 	PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*storageuc.PresignGetResult, error)
 	DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error
 	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)

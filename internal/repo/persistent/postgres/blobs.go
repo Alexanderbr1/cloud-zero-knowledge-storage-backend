@@ -16,13 +16,13 @@ var _ storageuc.BlobRegistry = (*Storage)(nil)
 func (s *Storage) RegisterBlob(
 	ctx context.Context,
 	id, userID uuid.UUID,
-	fileName, objectKey, uploadMethod string,
+	fileName, contentType, objectKey, uploadMethod string,
 	encryptedFileKey, fileIV []byte,
 ) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO stored_blobs (id, user_id, file_name, object_key, upload_method, encrypted_file_key, file_iv)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		id, userID, fileName, objectKey, uploadMethod, encryptedFileKey, fileIV,
+		`INSERT INTO stored_blobs (id, user_id, file_name, content_type, object_key, upload_method, encrypted_file_key, file_iv)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		id, userID, fileName, contentType, objectKey, uploadMethod, encryptedFileKey, fileIV,
 	)
 	return err
 }
@@ -30,10 +30,10 @@ func (s *Storage) RegisterBlob(
 func (s *Storage) GetBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (storageuc.BlobMeta, bool, error) {
 	var m storageuc.BlobMeta
 	err := s.pool.QueryRow(ctx,
-		`SELECT object_key, encrypted_file_key, file_iv
+		`SELECT object_key, content_type, encrypted_file_key, file_iv
 		 FROM stored_blobs WHERE id = $1 AND user_id = $2`,
 		blobID, userID,
-	).Scan(&m.ObjectKey, &m.EncryptedFileKey, &m.FileIV)
+	).Scan(&m.ObjectKey, &m.ContentType, &m.EncryptedFileKey, &m.FileIV)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return storageuc.BlobMeta{}, false, nil
 	}
@@ -60,7 +60,7 @@ func (s *Storage) RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (obj
 
 func (s *Storage) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, file_name, object_key, created_at, encrypted_file_key, file_iv
+		`SELECT id, file_name, content_type, object_key, created_at, encrypted_file_key, file_iv
 		 FROM stored_blobs
 		 WHERE user_id = $1
 		 ORDER BY created_at DESC`,
@@ -74,7 +74,7 @@ func (s *Storage) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blo
 	var out []entity.Blob
 	for rows.Next() {
 		b := entity.Blob{UserID: userID}
-		if err := rows.Scan(&b.ID, &b.FileName, &b.ObjectKey, &b.CreatedAt, &b.EncryptedFileKey, &b.FileIV); err != nil {
+		if err := rows.Scan(&b.ID, &b.FileName, &b.ContentType, &b.ObjectKey, &b.CreatedAt, &b.EncryptedFileKey, &b.FileIV); err != nil {
 			return nil, err
 		}
 		out = append(out, b)

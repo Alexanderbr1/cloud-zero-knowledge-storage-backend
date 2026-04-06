@@ -59,9 +59,9 @@ go run ./cmd/app
 
 | Метод | Путь | Описание |
 |--------|------|----------|
-| `POST` | `/v1/storage/presign` | Тело: `{"file_name":"report.pdf"}`. Сервер **не хранит MIME-тип**; ответ: `upload_url`, `blob_id`, `object_key` (`blobs/<user_id>/<blob_id>`). Клиент делает **PUT** на `upload_url` с телом (часто `application/octet-stream` для ciphertext). |
-| `GET` | `/v1/storage/blobs` | Список файлов **текущего пользователя**. |
-| `POST` | `/v1/storage/blobs/{blob_id}/presign-get` | Временная ссылка на скачивание из MinIO/S3. |
+| `POST` | `/v1/storage/presign` | Тело: `file_name`, обязательный **`content_type`** (MIME, 1–128 символов), `encrypted_file_key`, `file_iv`. Ответ: `upload_url`, `blob_id`, **`content_type`**, `instructions`. Клиент делает **PUT** на `upload_url` с заголовком `Content-Type`, совпадающим с ответом. |
+| `GET` | `/v1/storage/blobs` | Список файлов **текущего пользователя** (включая `content_type` на элемент). |
+| `POST` | `/v1/storage/blobs/{blob_id}/presign-get` | Временная ссылка на скачивание; в JSON также **`content_type`** для клиента. |
 | `DELETE` | `/v1/storage/blobs/{blob_id}` | Удаление объекта и метаданных (**только свой** blob). **404**, если чужой или нет записи. |
 
 Переменные MinIO: `MINIO_USE_SSL`, `MINIO_REGION`, `MINIO_PRESIGN_TTL` (например `1h`).
@@ -83,8 +83,10 @@ docker run -p 9000:9000 -p 9001:9001 \
 | Версия | Файлы | Таблица |
 |--------|--------|---------|
 | `1` | `000001_users.*` | `users` |
-| `2` | `000002_stored_blobs.*` | `stored_blobs` (без `content_type`) |
+| `2` | `000002_stored_blobs.*` | `stored_blobs` |
 | `3` | `000003_refresh_sessions.*` | `refresh_sessions` |
+| `4` | `000004_add_constraints.*` | ограничения и индексы |
+| `5` | `000005_blob_content_type.*` | колонка `stored_blobs.content_type` (NOT NULL) |
 
 Если база уже создавалась **другой** историей миграций, пересоздайте volume Postgres или очистите БД, иначе `migrate` может конфликтовать с `schema_migrations`.
 

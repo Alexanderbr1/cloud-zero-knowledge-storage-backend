@@ -3,7 +3,9 @@ package v1
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -35,6 +37,7 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "bad request")
 			return
 		}
+		in.ContentType = strings.TrimSpace(in.ContentType)
 		if err := restapi.ValidateStruct(&in); err != nil {
 			restapi.WriteValidationError(w, err)
 			return
@@ -49,7 +52,7 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid file_iv")
 			return
 		}
-		out, err := d.Storage.PresignPut(r.Context(), uid, in.FileName, encryptedFileKey, fileIV)
+		out, err := d.Storage.PresignPut(r.Context(), uid, in.FileName, in.ContentType, encryptedFileKey, fileIV)
 		if mapStorageErr(w, err) {
 			return
 		}
@@ -58,7 +61,8 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 			UploadURL:    out.UploadURL,
 			ExpiresIn:    out.ExpiresIn,
 			HTTPMethod:   out.HTTPMethod,
-			Instructions: "PUT encrypted file bytes to upload_url; use Content-Type: application/octet-stream",
+			ContentType:  out.ContentType,
+			Instructions: fmt.Sprintf("PUT encrypted file bytes to upload_url; set header Content-Type: %s", out.ContentType),
 		})
 	}
 }
@@ -84,6 +88,7 @@ func storagePresignGet(d Deps) http.HandlerFunc {
 			DownloadURL:      out.DownloadURL,
 			ExpiresIn:        out.ExpiresIn,
 			HTTPMethod:       out.HTTPMethod,
+			ContentType:      out.ContentType,
 			EncryptedFileKey: base64.StdEncoding.EncodeToString(out.EncryptedFileKey),
 			FileIV:           base64.StdEncoding.EncodeToString(out.FileIV),
 		})
@@ -125,6 +130,7 @@ func storageListBlobs(d Deps) http.HandlerFunc {
 			items = append(items, dto.StorageBlobItem{
 				BlobID:           b.ID.String(),
 				FileName:         b.FileName,
+				ContentType:      b.ContentType,
 				CreatedAt:        b.CreatedAt,
 				EncryptedFileKey: base64.StdEncoding.EncodeToString(b.EncryptedFileKey),
 				FileIV:           base64.StdEncoding.EncodeToString(b.FileIV),
