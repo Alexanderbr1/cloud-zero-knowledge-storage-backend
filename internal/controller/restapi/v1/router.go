@@ -19,7 +19,6 @@ type AuthService interface {
 	Login(ctx context.Context, email, password string) (authuc.TokenPair, error)
 	Refresh(ctx context.Context, refreshToken string) (authuc.TokenPair, error)
 	Logout(ctx context.Context, refreshToken string) error
-	GetCryptoParams(ctx context.Context, email string) (cryptoSalt []byte, ok bool, err error)
 }
 
 // StorageService — бизнес-логика хранилища (реализует usecase/storage.Service).
@@ -42,7 +41,6 @@ func NewRouter(d Deps) chi.Router {
 	r := chi.NewRouter()
 
 	r.Route("/auth", func(r chi.Router) {
-		r.Get("/crypto-params", getCryptoParams(d)) // публичный, до логина
 		r.Post("/register", register(d))
 		r.Post("/login", login(d))
 		r.Post("/refresh", refresh(d))

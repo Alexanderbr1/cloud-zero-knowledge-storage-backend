@@ -87,30 +87,6 @@ func logout(d Deps) http.HandlerFunc {
 	}
 }
 
-// getCryptoParams — публичный endpoint (не требует авторизации).
-// Возвращает crypto_salt пользователя по email для деривации мастер-ключа до логина.
-func getCryptoParams(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		email := r.URL.Query().Get("email")
-		if email == "" {
-			restapi.WriteError(w, http.StatusBadRequest, "email required")
-			return
-		}
-		salt, ok, err := d.Auth.GetCryptoParams(r.Context(), email)
-		if err != nil {
-			writeAuthErr(w, err)
-			return
-		}
-		if !ok || len(salt) == 0 {
-			restapi.WriteError(w, http.StatusNotFound, "not found")
-			return
-		}
-		restapi.WriteJSON(w, http.StatusOK, dto.CryptoParamsResponse{
-			CryptoSalt: base64.StdEncoding.EncodeToString(salt),
-		})
-	}
-}
-
 func writeTokenResponse(w http.ResponseWriter, cookieCfg config.RefreshCookieConfig, status int, out authuc.TokenPair) {
 	maxAge := int(out.RefreshExpiresIn)
 	if maxAge < 0 {
@@ -118,12 +94,16 @@ func writeTokenResponse(w http.ResponseWriter, cookieCfg config.RefreshCookieCon
 	}
 	setRefreshTokenCookie(w, cookieCfg, out.RefreshToken, maxAge)
 
-	restapi.WriteJSON(w, status, dto.TokenResponse{
+	body := dto.TokenResponse{
 		AccessToken:      out.AccessToken,
 		ExpiresIn:        out.AccessExpiresIn,
 		RefreshExpiresIn: out.RefreshExpiresIn,
 		TokenType:        tokenTypeBearer,
-	})
+	}
+	if len(out.CryptoSalt) > 0 {
+		body.CryptoSalt = base64.StdEncoding.EncodeToString(out.CryptoSalt)
+	}
+	restapi.WriteJSON(w, status, body)
 }
 
 func writeAuthErr(w http.ResponseWriter, err error) {

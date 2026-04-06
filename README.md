@@ -42,12 +42,12 @@ go run ./cmd/app
 
 | Метод | Путь | Описание |
 |--------|------|----------|
-| `POST` | `/v1/auth/register` | Тело: `{"email":"...","password":"..."}` (пароль min 8 символов). **201** + JSON с access и **Set-Cookie** с refresh (см. ниже). |
-| `POST` | `/v1/auth/login` | Тело: `{"email":"...","password":"..."}`. **200** + JSON с access и **Set-Cookie** с refresh. |
+| `POST` | `/v1/auth/register` | Тело: `{"email":"...","password":"...","crypto_salt":"..."}` (пароль min 8 символов; `crypto_salt` — base64, 16 байт с клиента). **201** + JSON с access, **`crypto_salt`** (эхо для клиента) и **Set-Cookie** с refresh. |
+| `POST` | `/v1/auth/login` | Тело: `{"email":"...","password":"..."}`. **200** + JSON с access, **`crypto_salt`** (для PBKDF2 на клиенте только после успешной проверки пароля) и **Set-Cookie** с refresh. |
 | `POST` | `/v1/auth/refresh` | Тело не нужно: refresh берётся из **HttpOnly**-куки (имя по умолчанию `refresh_token`). **200** + новый access и новая кука (ротация). **401** — нет/невалидный refresh (кука сбрасывается). |
 | `POST` | `/v1/auth/logout` | Refresh из куки; **204** — кука очищается, сессия отзывается при наличии валидного токена (идемпотентно). |
 
-Ответ register/login/refresh в JSON: `access_token`, `expires_in` (секунды access), `refresh_expires_in` (секунды жизни refresh), `token_type`: `Bearer`. Сам **refresh-токен в JSON не отдаётся** — только в куке `HttpOnly`; при HTTPS включайте `REFRESH_COOKIE_SECURE=true`.
+Ответ register/login в JSON: `access_token`, `expires_in`, `refresh_expires_in`, `token_type`: `Bearer`, `crypto_salt` (base64). Ответ **refresh** — те же поля токена **без** `crypto_salt`. Сам **refresh-токен в JSON не отдаётся** — только в куке `HttpOnly`; при HTTPS включайте `REFRESH_COOKIE_SECURE=true`.
 
 Переменные: `JWT_ACCESS_TTL` (например `15m`), `JWT_REFRESH_TTL` (например `720h`), опционально кука: `REFRESH_COOKIE_NAME`, `REFRESH_COOKIE_PATH`, `REFRESH_COOKIE_DOMAIN`, `REFRESH_COOKIE_SECURE`, `REFRESH_COOKIE_SAMESITE` (`lax` \| `strict` \| `none`; для `none` обязателен `REFRESH_COOKIE_SECURE=true`). Для SPA на **другом origin** нужны `fetch`/`axios` с `credentials: 'include'` и CORS с конкретным `Access-Control-Allow-Origin` и `Access-Control-Allow-Credentials: true`.
 

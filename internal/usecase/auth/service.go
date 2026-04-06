@@ -45,11 +45,14 @@ type Service struct {
 }
 
 // TokenPair — access + refresh после login/register/refresh.
+// CryptoSalt — только для login/register: клиент деривирует мастер-ключ после успешной аутентификации.
+// После refresh поле пустое (мастер-ключ уже в памяти клиента).
 type TokenPair struct {
 	AccessToken      string
 	AccessExpiresIn  int64
 	RefreshToken     string
 	RefreshExpiresIn int64
+	CryptoSalt       []byte
 }
 
 func (s *Service) Register(ctx context.Context, email, password string, cryptoSalt []byte) (TokenPair, error) {
@@ -76,26 +79,12 @@ func (s *Service) Register(ctx context.Context, email, password string, cryptoSa
 		}
 		return TokenPair{}, err
 	}
-	return s.issueTokenPair(ctx, id)
-}
-
-// GetCryptoParams возвращает crypto_salt пользователя по email (публичный endpoint, до логина).
-func (s *Service) GetCryptoParams(ctx context.Context, email string) (cryptoSalt []byte, ok bool, err error) {
-	email = strings.TrimSpace(strings.ToLower(email))
-	if email == "" {
-		return nil, false, ErrInvalidInput
-	}
-	userCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	u, found, err := s.Users.GetByEmail(userCtx, email)
+	pair, err := s.issueTokenPair(ctx, id)
 	if err != nil {
-		return nil, false, err
+		return TokenPair{}, err
 	}
-	if !found {
-		return nil, false, nil
-	}
-	return u.CryptoSalt, true, nil
+	pair.CryptoSalt = append([]byte(nil), cryptoSalt...)
+	return pair, nil
 }
 
 func (s *Service) Login(ctx context.Context, email, password string) (TokenPair, error) {
@@ -117,7 +106,12 @@ func (s *Service) Login(ctx context.Context, email, password string) (TokenPair,
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
 		return TokenPair{}, ErrInvalidCredentials
 	}
-	return s.issueTokenPair(ctx, u.ID)
+	pair, err := s.issueTokenPair(ctx, u.ID)
+	if err != nil {
+		return TokenPair{}, err
+	}
+	pair.CryptoSalt = append([]byte(nil), u.CryptoSalt...)
+	return pair, nil
 }
 
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, error) {

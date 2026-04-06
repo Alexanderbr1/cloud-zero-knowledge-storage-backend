@@ -16,10 +16,6 @@ type TokenResponse struct {
 	ExpiresIn        int64  `json:"expires_in"`
 	RefreshExpiresIn int64  `json:"refresh_expires_in"`
 	TokenType        string `json:"token_type"`
-}
-
-// CryptoParamsResponse — публичный ответ на GET /auth/crypto-params?email=...
-// Возвращает crypto_salt для деривации мастер-ключа на клиенте до логина.
-type CryptoParamsResponse struct {
-	CryptoSalt string `json:"crypto_salt"` // base64-encoded 16 байт
+	// CryptoSalt — только в ответах register/login (base64); в refresh отсутствует.
+	CryptoSalt string `json:"crypto_salt,omitempty"`
 }
