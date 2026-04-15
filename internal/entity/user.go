@@ -7,5 +7,5 @@ type User struct {
 	ID           uuid.UUID
 	Email        string
 	PasswordHash string
-	CryptoSalt   []byte // соль для PBKDF2 key derivation; nil у старых аккаунтов
+	CryptoSalt   []byte // соль для PBKDF2 key derivation
 }

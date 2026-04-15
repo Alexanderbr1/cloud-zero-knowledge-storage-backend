@@ -17,8 +17,6 @@ func newHTTPHandler(deps v1.Deps) http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Logger)
-	r.Route("/v1", func(r chi.Router) {
-		r.Mount("/", v1.NewRouter(deps))
-	})
+	r.Mount("/v1", v1.NewRouter(deps))
 	return r
 }

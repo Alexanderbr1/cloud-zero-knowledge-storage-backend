@@ -14,6 +14,6 @@ type Blob struct {
 	ContentType      string
 	ObjectKey        string
 	CreatedAt        time.Time
-	EncryptedFileKey []byte // AES-KW обёрнутый файловый ключ; nil у незашифрованных файлов
-	FileIV           []byte // 12-байтовый IV для AES-GCM; nil у незашифрованных файлов
+	EncryptedFileKey []byte // AES-KW обёрнутый файловый ключ
+	FileIV           []byte // 12-байтовый IV для AES-GCM
 }
