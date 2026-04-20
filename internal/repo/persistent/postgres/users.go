@@ -13,10 +13,16 @@ import (
 
 var _ authuc.UserRepository = (*Storage)(nil)
 
-func (s *Storage) CreateUser(ctx context.Context, id uuid.UUID, email, passwordHash string, cryptoSalt []byte) error {
+func (s *Storage) CreateUser(
+	ctx context.Context,
+	id uuid.UUID,
+	email, srpSalt, srpVerifier, bcryptSalt string,
+	cryptoSalt []byte,
+) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO users (id, email, password_hash, crypto_salt) VALUES ($1, $2, $3, $4)`,
-		id, email, passwordHash, cryptoSalt,
+		`INSERT INTO users (id, email, srp_salt, srp_verifier, bcrypt_salt, crypto_salt)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		id, email, srpSalt, srpVerifier, bcryptSalt, cryptoSalt,
 	)
 	return err
 }
@@ -24,9 +30,10 @@ func (s *Storage) CreateUser(ctx context.Context, id uuid.UUID, email, passwordH
 func (s *Storage) GetByEmail(ctx context.Context, email string) (entity.User, bool, error) {
 	var u entity.User
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, email, password_hash, crypto_salt FROM users WHERE email = $1`,
+		`SELECT id, email, srp_salt, srp_verifier, bcrypt_salt, crypto_salt
+		 FROM users WHERE email = $1`,
 		email,
-	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CryptoSalt)
+	).Scan(&u.ID, &u.Email, &u.SRPSalt, &u.SRPVerifier, &u.BcryptSalt, &u.CryptoSalt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return entity.User{}, false, nil
 	}

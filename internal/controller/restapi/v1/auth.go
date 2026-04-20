@@ -29,18 +29,18 @@ func register(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid crypto_salt")
 			return
 		}
-		out, err := d.Auth.Register(r.Context(), in.Email, in.Password, cryptoSalt)
+		pair, err := d.Auth.Register(r.Context(), in.Email, in.SRPSalt, in.SRPVerifier, in.BcryptSalt, cryptoSalt)
 		if err != nil {
 			writeAuthErr(w, err)
 			return
 		}
-		writeTokenResponse(w, d.RefreshCookie, http.StatusCreated, out)
+		writeTokenResponse(w, d.RefreshCookie, http.StatusCreated, pair, "")
 	}
 }
 
-func login(d Deps) http.HandlerFunc {
+func loginInit(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var in dto.LoginRequest
+		var in dto.LoginInitRequest
 		if err := restapi.DecodeJSON(r, &in); err != nil {
 			restapi.WriteError(w, http.StatusBadRequest, "bad request")
 			return
@@ -49,12 +49,38 @@ func login(d Deps) http.HandlerFunc {
 			restapi.WriteValidationError(w, err)
 			return
 		}
-		out, err := d.Auth.Login(r.Context(), in.Email, in.Password)
+		result, err := d.Auth.LoginInit(r.Context(), in.Email, in.A)
 		if err != nil {
 			writeAuthErr(w, err)
 			return
 		}
-		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, out)
+		restapi.WriteJSON(w, http.StatusOK, dto.LoginInitResponse{
+			SessionID:  result.SessionID,
+			SRPSalt:    result.SRPSalt,
+			BcryptSalt: result.BcryptSalt,
+			B:          result.B,
+			CryptoSalt: base64.StdEncoding.EncodeToString(result.CryptoSalt),
+		})
+	}
+}
+
+func loginFinalize(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var in dto.LoginFinalizeRequest
+		if err := restapi.DecodeJSON(r, &in); err != nil {
+			restapi.WriteError(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		if err := restapi.ValidateStruct(&in); err != nil {
+			restapi.WriteValidationError(w, err)
+			return
+		}
+		result, err := d.Auth.LoginFinalize(r.Context(), in.SessionID, in.M1)
+		if err != nil {
+			writeAuthErr(w, err)
+			return
+		}
+		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, result.Pair, result.M2)
 	}
 }
 
@@ -65,8 +91,7 @@ func refresh(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusUnauthorized, "invalid refresh token")
 			return
 		}
-
-		out, err := d.Auth.Refresh(r.Context(), rt)
+		pair, err := d.Auth.Refresh(r.Context(), rt)
 		if err != nil {
 			if errors.Is(err, authuc.ErrInvalidRefresh) {
 				clearRefreshTokenCookie(w, d.RefreshCookie)
@@ -74,7 +99,7 @@ func refresh(d Deps) http.HandlerFunc {
 			writeAuthErr(w, err)
 			return
 		}
-		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, out)
+		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, pair, "")
 	}
 }
 
@@ -87,23 +112,20 @@ func logout(d Deps) http.HandlerFunc {
 	}
 }
 
-func writeTokenResponse(w http.ResponseWriter, cookieCfg config.RefreshCookieConfig, status int, out authuc.TokenPair) {
-	maxAge := int(out.RefreshExpiresIn)
+func writeTokenResponse(w http.ResponseWriter, cookieCfg config.RefreshCookieConfig, status int, pair authuc.TokenPair, m2 string) {
+	maxAge := int(pair.RefreshExpiresIn)
 	if maxAge < 0 {
 		maxAge = 0
 	}
-	setRefreshTokenCookie(w, cookieCfg, out.RefreshToken, maxAge)
+	setRefreshTokenCookie(w, cookieCfg, pair.RefreshToken, maxAge)
 
-	body := dto.TokenResponse{
-		AccessToken:      out.AccessToken,
-		ExpiresIn:        out.AccessExpiresIn,
-		RefreshExpiresIn: out.RefreshExpiresIn,
+	restapi.WriteJSON(w, status, dto.TokenResponse{
+		AccessToken:      pair.AccessToken,
+		ExpiresIn:        pair.AccessExpiresIn,
+		RefreshExpiresIn: pair.RefreshExpiresIn,
 		TokenType:        tokenTypeBearer,
-	}
-	if len(out.CryptoSalt) > 0 {
-		body.CryptoSalt = base64.StdEncoding.EncodeToString(out.CryptoSalt)
-	}
-	restapi.WriteJSON(w, status, body)
+		M2:               m2,
+	})
 }
 
 func writeAuthErr(w http.ResponseWriter, err error) {

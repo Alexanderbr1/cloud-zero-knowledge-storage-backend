@@ -13,10 +13,11 @@ import (
 	storageuc "cloud-backend/internal/usecase/storage"
 )
 
-// AuthService — бизнес-логика аутентификации (реализует usecase/auth.Service).
+// AuthService — бизнес-логика аутентификации.
 type AuthService interface {
-	Register(ctx context.Context, email, password string, cryptoSalt []byte) (authuc.TokenPair, error)
-	Login(ctx context.Context, email, password string) (authuc.TokenPair, error)
+	Register(ctx context.Context, email, srpSalt, srpVerifier, bcryptSalt string, cryptoSalt []byte) (authuc.TokenPair, error)
+	LoginInit(ctx context.Context, email, aHex string) (authuc.LoginInitResult, error)
+	LoginFinalize(ctx context.Context, sessionID, m1Hex string) (authuc.LoginFinalizeResult, error)
 	Refresh(ctx context.Context, refreshToken string) (authuc.TokenPair, error)
 	Logout(ctx context.Context, refreshToken string) error
 }
@@ -42,7 +43,8 @@ func NewRouter(d Deps) chi.Router {
 
 	r.Route("/auth", func(r chi.Router) {
 		r.Post("/register", register(d))
-		r.Post("/login", login(d))
+		r.Post("/login/init", loginInit(d))
+		r.Post("/login/finalize", loginFinalize(d))
 		r.Post("/refresh", refresh(d))
 		r.Post("/logout", logout(d))
 	})
