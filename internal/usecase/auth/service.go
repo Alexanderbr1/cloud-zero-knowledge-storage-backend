@@ -40,6 +40,8 @@ type DeviceSessionRepository interface {
 	RevokeSession(ctx context.Context, id, userID uuid.UUID) error
 	RevokeOtherSessions(ctx context.Context, userID, exceptID uuid.UUID) error
 	RevokeDeviceSessionByID(ctx context.Context, id uuid.UUID) error
+	RevokeOrphanedSessions(ctx context.Context, userID uuid.UUID) error
+	RevokeAllOrphanedSessions(ctx context.Context) error
 }
 
 type TokenIssuer interface {
@@ -200,6 +202,12 @@ func (s *Service) LoginFinalize(ctx context.Context, sessionID, m1Hex string, de
 		return LoginFinalizeResult{}, ErrInvalidCredentials
 	}
 
+	// Clean up this user's orphaned sessions before creating a new one.
+	// Best-effort: a cleanup failure must not block login.
+	cleanCtx, cleanCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cleanCancel()
+	_ = s.DeviceSessions.RevokeOrphanedSessions(cleanCtx, entry.userID)
+
 	pair, err := s.issueTokenPair(ctx, entry.userID, device)
 	if err != nil {
 		return LoginFinalizeResult{}, err
@@ -268,6 +276,12 @@ func (s *Service) RevokeDeviceSession(ctx context.Context, userID, sessionID uui
 
 func (s *Service) RevokeOtherDeviceSessions(ctx context.Context, userID, currentSessionID uuid.UUID) error {
 	return s.DeviceSessions.RevokeOtherSessions(ctx, userID, currentSessionID)
+}
+
+// CleanOrphanedSessions удаляет все "мёртвые" device sessions по всем пользователям.
+// Предназначен для вызова фоновой джобой.
+func (s *Service) CleanOrphanedSessions(ctx context.Context) error {
+	return s.DeviceSessions.RevokeAllOrphanedSessions(ctx)
 }
 
 // ─── Приватные методы ─────────────────────────────────────────────────────

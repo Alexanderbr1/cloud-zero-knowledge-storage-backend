@@ -46,6 +46,8 @@ func Run(cfg config.Config, log zerolog.Logger) error {
 		return err
 	}
 
+	go runSessionCleanupJob(ctx, deps.Auth.(*authuc.Service), log)
+
 	return serve(ctx, newHTTPServer(cfg, deps), log, cfg.Server.ShutdownTimeout)
 }
 
@@ -91,6 +93,23 @@ func newHTTPServer(cfg config.Config, deps v1.Deps) *http.Server {
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
 		IdleTimeout:  cfg.Server.IdleTimeout,
+	}
+}
+
+func runSessionCleanupJob(ctx context.Context, svc *authuc.Service, log zerolog.Logger) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cleanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			if err := svc.CleanOrphanedSessions(cleanCtx); err != nil {
+				log.Error().Err(err).Msg("session cleanup job failed")
+			}
+			cancel()
+		}
 	}
 }
 

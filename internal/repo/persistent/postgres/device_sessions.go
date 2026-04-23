@@ -103,6 +103,41 @@ func (s *Storage) RevokeOtherSessions(ctx context.Context, userID, exceptID uuid
 	return err
 }
 
+// RevokeOrphanedSessions revokes device sessions that have no active refresh tokens —
+// those whose tokens expired naturally without an explicit logout.
+func (s *Storage) RevokeOrphanedSessions(ctx context.Context, userID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE device_sessions
+		 SET revoked_at = now()
+		 WHERE user_id = $1
+		   AND revoked_at IS NULL
+		   AND NOT EXISTS (
+		     SELECT 1 FROM refresh_sessions rs
+		     WHERE rs.device_session_id = device_sessions.id
+		       AND rs.revoked_at IS NULL
+		       AND rs.expires_at > now()
+		   )`,
+		userID,
+	)
+	return err
+}
+
+// RevokeAllOrphanedSessions revokes orphaned sessions across all users — used by the background job.
+func (s *Storage) RevokeAllOrphanedSessions(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE device_sessions
+		 SET revoked_at = now()
+		 WHERE revoked_at IS NULL
+		   AND NOT EXISTS (
+		     SELECT 1 FROM refresh_sessions rs
+		     WHERE rs.device_session_id = device_sessions.id
+		       AND rs.revoked_at IS NULL
+		       AND rs.expires_at > now()
+		   )`,
+	)
+	return err
+}
+
 // GetDeviceSessionByRefreshHash возвращает device_session_id для отзыва при логауте.
 func (s *Storage) GetDeviceSessionByRefreshHash(ctx context.Context, hash []byte) (uuid.UUID, error) {
 	var id uuid.UUID
