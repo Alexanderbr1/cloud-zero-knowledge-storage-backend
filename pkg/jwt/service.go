@@ -9,9 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-var (
-	ErrInvalidToken = errors.New("invalid token")
-)
+var ErrInvalidToken = errors.New("invalid token")
 
 // Service — выдача и проверка access JWT (HS256).
 type Service struct {
@@ -25,10 +23,13 @@ func NewService(secret []byte, accessTTL time.Duration) *Service {
 
 type accessClaims struct {
 	jwt.RegisteredClaims
+	// sid — device session ID; позволяет идентифицировать текущее устройство в списке сессий.
+	SessionID string `json:"sid"`
 }
 
-// IssueAccess возвращает строку JWT и срок жизни в секундах.
-func (s *Service) IssueAccess(userID uuid.UUID) (token string, expiresInSec int64, err error) {
+// IssueAccess возвращает JWT и срок жизни в секундах.
+// sub = userID, sid = deviceSessionID.
+func (s *Service) IssueAccess(userID, deviceSessionID uuid.UUID) (token string, expiresInSec int64, err error) {
 	if userID == uuid.Nil {
 		return "", 0, fmt.Errorf("jwt: empty user id")
 	}
@@ -40,6 +41,7 @@ func (s *Service) IssueAccess(userID uuid.UUID) (token string, expiresInSec int6
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(exp),
 		},
+		SessionID: deviceSessionID.String(),
 	})
 	raw, err := t.SignedString(s.secret)
 	if err != nil {
@@ -48,8 +50,8 @@ func (s *Service) IssueAccess(userID uuid.UUID) (token string, expiresInSec int6
 	return raw, int64(s.accessTTL.Seconds()), nil
 }
 
-// ParseAccessToken извлекает user_id из Bearer-токена.
-func (s *Service) ParseAccessToken(token string) (uuid.UUID, error) {
+// ParseAccessToken извлекает userID и deviceSessionID из Bearer-токена.
+func (s *Service) ParseAccessToken(token string) (userID, deviceSessionID uuid.UUID, err error) {
 	parsed, err := jwt.ParseWithClaims(token, &accessClaims{}, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
@@ -57,15 +59,17 @@ func (s *Service) ParseAccessToken(token string) (uuid.UUID, error) {
 		return s.secret, nil
 	})
 	if err != nil || !parsed.Valid {
-		return uuid.Nil, ErrInvalidToken
+		return uuid.Nil, uuid.Nil, ErrInvalidToken
 	}
 	claims, ok := parsed.Claims.(*accessClaims)
 	if !ok {
-		return uuid.Nil, ErrInvalidToken
+		return uuid.Nil, uuid.Nil, ErrInvalidToken
 	}
-	id, err := uuid.Parse(claims.Subject)
-	if err != nil || id == uuid.Nil {
-		return uuid.Nil, ErrInvalidToken
+	uid, err := uuid.Parse(claims.Subject)
+	if err != nil || uid == uuid.Nil {
+		return uuid.Nil, uuid.Nil, ErrInvalidToken
 	}
-	return id, nil
+	// sid может отсутствовать в старых токенах — не фатально.
+	sid, _ := uuid.Parse(claims.SessionID)
+	return uid, sid, nil
 }

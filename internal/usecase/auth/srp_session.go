@@ -10,7 +10,10 @@ import (
 	srppkg "cloud-backend/pkg/srp"
 )
 
-const srpSessionTTL = 5 * time.Minute
+const (
+	srpSessionTTL     = 5 * time.Minute
+	srpSessionMaxSize = 10_000 // prevent unbounded growth under load
+)
 
 type srpSessEntry struct {
 	userID     uuid.UUID
@@ -35,10 +38,16 @@ func NewSRPSessionStore(ctx context.Context) *srpSessionStore {
 	return st
 }
 
-func (s *srpSessionStore) store(id uuid.UUID, e *srpSessEntry) {
+// store saves the entry and reports whether it was accepted.
+// Returns false when the store is at capacity (safety valve against memory exhaustion).
+func (s *srpSessionStore) store(id uuid.UUID, e *srpSessEntry) bool {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.data) >= srpSessionMaxSize {
+		return false
+	}
 	s.data[id.String()] = e
-	s.mu.Unlock()
+	return true
 }
 
 // consume retrieves and removes the entry atomically; returns false if not found or expired.

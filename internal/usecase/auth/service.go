@@ -16,65 +16,109 @@ import (
 
 	"cloud-backend/internal/entity"
 	srppkg "cloud-backend/pkg/srp"
+	"cloud-backend/pkg/useragent"
 )
 
-// UserRepository — доступ к пользователям в БД.
+// ─── Репозитории ──────────────────────────────────────────────────────────
+
 type UserRepository interface {
 	CreateUser(ctx context.Context, id uuid.UUID, email, srpSalt, srpVerifier, bcryptSalt string, cryptoSalt []byte) error
 	GetByEmail(ctx context.Context, email string) (entity.User, bool, error)
 }
 
-// SessionRepository — refresh-сессии (ротация, отзыв).
 type SessionRepository interface {
-	CreateRefreshSession(ctx context.Context, sessionID, userID uuid.UUID, refreshTokenHash []byte, expiresAt time.Time) error
-	ConsumeRefreshSession(ctx context.Context, refreshTokenHash []byte) (sessionID, userID uuid.UUID, ok bool, err error)
+	CreateRefreshSession(ctx context.Context, sessionID, userID, deviceSessionID uuid.UUID, refreshTokenHash []byte, expiresAt time.Time) error
+	ConsumeRefreshSession(ctx context.Context, refreshTokenHash []byte) (sessionID, userID, deviceSessionID uuid.UUID, ok bool, err error)
 	RevokeRefreshSessionByHash(ctx context.Context, refreshTokenHash []byte) error
+	ConsumeAndGetDeviceSession(ctx context.Context, refreshTokenHash []byte) (uuid.UUID, error)
 }
 
-// TokenIssuer — выдача access JWT.
+type DeviceSessionRepository interface {
+	CreateDeviceSession(ctx context.Context, id, userID uuid.UUID, deviceName, ipAddress, userAgent string) error
+	UpdateLastActive(ctx context.Context, id uuid.UUID) error
+	ListActiveSessions(ctx context.Context, userID uuid.UUID) ([]entity.DeviceSession, error)
+	RevokeSession(ctx context.Context, id, userID uuid.UUID) error
+	RevokeOtherSessions(ctx context.Context, userID, exceptID uuid.UUID) error
+	RevokeDeviceSessionByID(ctx context.Context, id uuid.UUID) error
+}
+
 type TokenIssuer interface {
-	IssueAccess(userID uuid.UUID) (token string, expiresInSec int64, err error)
+	IssueAccess(userID, deviceSessionID uuid.UUID) (token string, expiresInSec int64, err error)
 }
 
-// Service — регистрация, вход и обновление токенов.
+// ─── Сервис ───────────────────────────────────────────────────────────────
+
 type Service struct {
-	Users       UserRepository
-	Sessions    SessionRepository
-	Tokens      TokenIssuer
-	RefreshTTL  time.Duration
-	SRPSessions *srpSessionStore
+	Users          UserRepository
+	Sessions       SessionRepository
+	DeviceSessions DeviceSessionRepository
+	Tokens         TokenIssuer
+	RefreshTTL     time.Duration
+	SRPSessions    *srpSessionStore
 }
 
-// TokenPair — access + refresh после login/register/refresh.
+// DeviceInfo — данные об устройстве, извлечённые HTTP-обработчиком из запроса.
+type DeviceInfo struct {
+	UserAgent  string
+	IPAddress  string
+	DeviceName string // распарсенное человекочитаемое имя
+}
+
+const maxUserAgentLen = 512
+
+// ParseDeviceInfo строит DeviceInfo из заголовков HTTP.
+// User-Agent truncated to maxUserAgentLen to prevent oversized storage.
+// IP is taken from X-Forwarded-For / X-Real-IP only for display — it can be spoofed by clients
+// and must not be used for security decisions.
+func ParseDeviceInfo(userAgent, remoteAddr, xForwardedFor, xRealIP string) DeviceInfo {
+	ip := remoteAddr
+	if xff := strings.TrimSpace(xForwardedFor); xff != "" {
+		ip = strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])
+	} else if xrip := strings.TrimSpace(xRealIP); xrip != "" {
+		ip = xrip
+	} else if idx := strings.LastIndex(remoteAddr, ":"); idx > 0 {
+		ip = remoteAddr[:idx]
+	}
+	if len(userAgent) > maxUserAgentLen {
+		userAgent = userAgent[:maxUserAgentLen]
+	}
+	return DeviceInfo{
+		UserAgent:  userAgent,
+		IPAddress:  ip,
+		DeviceName: useragent.Parse(userAgent),
+	}
+}
+
+// ─── Типы результатов ─────────────────────────────────────────────────────
+
 type TokenPair struct {
 	AccessToken      string
 	AccessExpiresIn  int64
 	RefreshToken     string
 	RefreshExpiresIn int64
+	DeviceSessionID  uuid.UUID
 }
 
-// LoginInitResult — данные для клиента после первого шага SRP-логина.
 type LoginInitResult struct {
 	SessionID  string
-	SRPSalt    string // hex-encoded SRP salt
-	BcryptSalt string // bcrypt salt string ($2b$10$...)
-	B          string // hex-encoded server public ephemeral
-	CryptoSalt []byte // for PBKDF2 master-key derivation on client
+	SRPSalt    string
+	BcryptSalt string
+	B          string
+	CryptoSalt []byte
 }
 
-// LoginFinalizeResult — данные после успешной проверки M1.
 type LoginFinalizeResult struct {
 	M2   string
 	Pair TokenPair
-	// CryptoSalt is empty here: already returned in LoginInitResult.
 }
 
-// Register stores SRP credentials and issues tokens.
-// The client is responsible for all bcrypt and SRP computation.
+// ─── Методы аутентификации ────────────────────────────────────────────────
+
 func (s *Service) Register(
 	ctx context.Context,
 	email, srpSalt, srpVerifier, bcryptSalt string,
 	cryptoSalt []byte,
+	device DeviceInfo,
 ) (TokenPair, error) {
 	email = strings.TrimSpace(strings.ToLower(email))
 	if email == "" || srpSalt == "" || srpVerifier == "" || bcryptSalt == "" || len(cryptoSalt) == 0 {
@@ -92,12 +136,9 @@ func (s *Service) Register(
 		}
 		return TokenPair{}, err
 	}
-	return s.issueTokenPair(ctx, id)
+	return s.issueTokenPair(ctx, id, device)
 }
 
-// LoginInit — первый шаг SRP-логина.
-// Клиент присылает email и свой публичный эфемерный ключ A.
-// Сервер возвращает SRP-параметры и свой B, не проверяя ничего криптографически.
 func (s *Service) LoginInit(ctx context.Context, email, aHex string) (LoginInitResult, error) {
 	email = strings.TrimSpace(strings.ToLower(email))
 	if email == "" || aHex == "" {
@@ -112,7 +153,6 @@ func (s *Service) LoginInit(ctx context.Context, email, aHex string) (LoginInitR
 		return LoginInitResult{}, err
 	}
 	if !ok {
-		// Don't reveal that user doesn't exist; return a dummy delay target
 		return LoginInitResult{}, ErrInvalidCredentials
 	}
 
@@ -122,7 +162,7 @@ func (s *Service) LoginInit(ctx context.Context, email, aHex string) (LoginInitR
 	}
 
 	sessionID := uuid.New()
-	s.SRPSessions.store(sessionID, &srpSessEntry{
+	if !s.SRPSessions.store(sessionID, &srpSessEntry{
 		userID:     u.ID,
 		email:      email,
 		srpSaltHex: u.SRPSalt,
@@ -131,7 +171,9 @@ func (s *Service) LoginInit(ctx context.Context, email, aHex string) (LoginInitR
 		cryptoSalt: append([]byte(nil), u.CryptoSalt...),
 		bcryptSalt: u.BcryptSalt,
 		expiresAt:  time.Now().Add(srpSessionTTL),
-	})
+	}) {
+		return LoginInitResult{}, fmt.Errorf("srp session store at capacity")
+	}
 
 	return LoginInitResult{
 		SessionID:  sessionID.String(),
@@ -142,10 +184,7 @@ func (s *Service) LoginInit(ctx context.Context, email, aHex string) (LoginInitR
 	}, nil
 }
 
-// LoginFinalize — второй шаг SRP-логина.
-// Клиент присылает идентификатор сессии и свой proof M1.
-// Сервер проверяет M1 и возвращает M2 вместе с токенами.
-func (s *Service) LoginFinalize(ctx context.Context, sessionID, m1Hex string) (LoginFinalizeResult, error) {
+func (s *Service) LoginFinalize(ctx context.Context, sessionID, m1Hex string, device DeviceInfo) (LoginFinalizeResult, error) {
 	sid, err := uuid.Parse(sessionID)
 	if err != nil {
 		return LoginFinalizeResult{}, ErrInvalidInput
@@ -161,7 +200,7 @@ func (s *Service) LoginFinalize(ctx context.Context, sessionID, m1Hex string) (L
 		return LoginFinalizeResult{}, ErrInvalidCredentials
 	}
 
-	pair, err := s.issueTokenPair(ctx, entry.userID)
+	pair, err := s.issueTokenPair(ctx, entry.userID, device)
 	if err != nil {
 		return LoginFinalizeResult{}, err
 	}
@@ -179,35 +218,83 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 	sessionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	_, userID, ok, err := s.Sessions.ConsumeRefreshSession(sessionCtx, hash)
+	_, userID, deviceSessionID, ok, err := s.Sessions.ConsumeRefreshSession(sessionCtx, hash)
 	if err != nil {
 		return TokenPair{}, err
 	}
 	if !ok {
 		return TokenPair{}, ErrInvalidRefresh
 	}
-	return s.issueTokenPair(ctx, userID)
+
+	// Обновляем last_active_at — пользователь активен.
+	_ = s.DeviceSessions.UpdateLastActive(ctx, deviceSessionID)
+
+	return s.issueTokenPairForDevice(ctx, userID, deviceSessionID)
 }
 
-// Logout отзывает refresh-сессию по токену (идемпотентно: пустой токен — без ошибки).
 func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 	refreshToken = strings.TrimSpace(refreshToken)
 	if refreshToken == "" {
 		return nil
 	}
 	hash := refreshTokenHash(refreshToken)
+
 	sessionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	return s.Sessions.RevokeRefreshSessionByHash(sessionCtx, hash)
+	// Атомарно отзываем refresh-токен и узнаём device_session_id.
+	deviceSessionID, err := s.Sessions.ConsumeAndGetDeviceSession(sessionCtx, hash)
+	if err != nil {
+		return err
+	}
+	if deviceSessionID == uuid.Nil {
+		// Token not found or already revoked — treat as successful logout.
+		return nil
+	}
+
+	// Отзываем само устройство.
+	return s.DeviceSessions.RevokeDeviceSessionByID(ctx, deviceSessionID)
 }
 
-func (s *Service) issueTokenPair(ctx context.Context, userID uuid.UUID) (TokenPair, error) {
-	accessRaw, accessExp, err := s.Tokens.IssueAccess(userID)
+// ─── Управление устройствами ──────────────────────────────────────────────
+
+func (s *Service) ListDeviceSessions(ctx context.Context, userID uuid.UUID) ([]entity.DeviceSession, error) {
+	return s.DeviceSessions.ListActiveSessions(ctx, userID)
+}
+
+func (s *Service) RevokeDeviceSession(ctx context.Context, userID, sessionID uuid.UUID) error {
+	return s.DeviceSessions.RevokeSession(ctx, sessionID, userID)
+}
+
+func (s *Service) RevokeOtherDeviceSessions(ctx context.Context, userID, currentSessionID uuid.UUID) error {
+	return s.DeviceSessions.RevokeOtherSessions(ctx, userID, currentSessionID)
+}
+
+// ─── Приватные методы ─────────────────────────────────────────────────────
+
+// issueTokenPair создаёт новое device session и выдаёт токены.
+func (s *Service) issueTokenPair(ctx context.Context, userID uuid.UUID, device DeviceInfo) (TokenPair, error) {
+	deviceSessionID := uuid.New()
+	devCtx, devCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer devCancel()
+
+	if err := s.DeviceSessions.CreateDeviceSession(
+		devCtx, deviceSessionID, userID,
+		device.DeviceName, device.IPAddress, device.UserAgent,
+	); err != nil {
+		return TokenPair{}, fmt.Errorf("create device session: %w", err)
+	}
+
+	return s.issueTokenPairForDevice(ctx, userID, deviceSessionID)
+}
+
+// issueTokenPairForDevice выдаёт токены для существующей device session (используется при Refresh).
+func (s *Service) issueTokenPairForDevice(ctx context.Context, userID, deviceSessionID uuid.UUID) (TokenPair, error) {
+	accessRaw, accessExp, err := s.Tokens.IssueAccess(userID, deviceSessionID)
 	if err != nil {
 		return TokenPair{}, err
 	}
-	refreshRaw, refreshHash, err := newRefreshToken()
+	refreshRaw, refreshHashBytes, err := newRefreshToken()
 	if err != nil {
 		return TokenPair{}, err
 	}
@@ -217,7 +304,7 @@ func (s *Service) issueTokenPair(ctx context.Context, userID uuid.UUID) (TokenPa
 	sessCtx, sessCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer sessCancel()
 
-	if err := s.Sessions.CreateRefreshSession(sessCtx, sessID, userID, refreshHash, expiresAt); err != nil {
+	if err := s.Sessions.CreateRefreshSession(sessCtx, sessID, userID, deviceSessionID, refreshHashBytes, expiresAt); err != nil {
 		return TokenPair{}, err
 	}
 	return TokenPair{
@@ -225,6 +312,7 @@ func (s *Service) issueTokenPair(ctx context.Context, userID uuid.UUID) (TokenPa
 		AccessExpiresIn:  accessExp,
 		RefreshToken:     refreshRaw,
 		RefreshExpiresIn: int64(s.RefreshTTL.Seconds()),
+		DeviceSessionID:  deviceSessionID,
 	}, nil
 }
 

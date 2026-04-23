@@ -55,11 +55,12 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 	tokens := jwtpkg.NewService([]byte(cfg.JWT.Secret), cfg.JWT.AccessTTL)
 
 	authSvc := &authuc.Service{
-		Users:       store,
-		Sessions:    store,
-		Tokens:      tokens,
-		RefreshTTL:  cfg.JWT.RefreshTTL,
-		SRPSessions: authuc.NewSRPSessionStore(ctx),
+		Users:          store,
+		Sessions:       store,
+		DeviceSessions: store,
+		Tokens:         tokens,
+		RefreshTTL:     cfg.JWT.RefreshTTL,
+		SRPSessions:    authuc.NewSRPSessionStore(ctx),
 	}
 
 	ms, err := miniostore.NewStore(cfg.MinIO)

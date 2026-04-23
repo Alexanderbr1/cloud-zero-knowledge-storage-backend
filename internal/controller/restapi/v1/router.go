@@ -15,11 +15,14 @@ import (
 
 // AuthService — бизнес-логика аутентификации.
 type AuthService interface {
-	Register(ctx context.Context, email, srpSalt, srpVerifier, bcryptSalt string, cryptoSalt []byte) (authuc.TokenPair, error)
+	Register(ctx context.Context, email, srpSalt, srpVerifier, bcryptSalt string, cryptoSalt []byte, device authuc.DeviceInfo) (authuc.TokenPair, error)
 	LoginInit(ctx context.Context, email, aHex string) (authuc.LoginInitResult, error)
-	LoginFinalize(ctx context.Context, sessionID, m1Hex string) (authuc.LoginFinalizeResult, error)
+	LoginFinalize(ctx context.Context, sessionID, m1Hex string, device authuc.DeviceInfo) (authuc.LoginFinalizeResult, error)
 	Refresh(ctx context.Context, refreshToken string) (authuc.TokenPair, error)
 	Logout(ctx context.Context, refreshToken string) error
+	ListDeviceSessions(ctx context.Context, userID uuid.UUID) ([]entity.DeviceSession, error)
+	RevokeDeviceSession(ctx context.Context, userID, sessionID uuid.UUID) error
+	RevokeOtherDeviceSessions(ctx context.Context, userID, currentSessionID uuid.UUID) error
 }
 
 // StorageService — бизнес-логика хранилища (реализует usecase/storage.Service).
@@ -49,14 +52,21 @@ func NewRouter(d Deps) chi.Router {
 		r.Post("/logout", logout(d))
 	})
 
-	if d.Storage != nil {
-		r.Group(func(r chi.Router) {
-			r.Use(restapi.AuthMiddleware(d.Tokens))
+	r.Group(func(r chi.Router) {
+		r.Use(restapi.AuthMiddleware(d.Tokens))
+
+		r.Route("/auth/sessions", func(r chi.Router) {
+			r.Get("/", listSessions(d))
+			r.Delete("/", revokeOtherSessions(d))
+			r.Delete("/{id}", revokeSession(d))
+		})
+
+		if d.Storage != nil {
 			r.Route("/storage", func(r chi.Router) {
 				registerStorageRoutes(r, d)
 			})
-		})
-	}
+		}
+	})
 
 	return r
 }

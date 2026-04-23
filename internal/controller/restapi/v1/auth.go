@@ -29,7 +29,13 @@ func register(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid crypto_salt")
 			return
 		}
-		pair, err := d.Auth.Register(r.Context(), in.Email, in.SRPSalt, in.SRPVerifier, in.BcryptSalt, cryptoSalt)
+		device := authuc.ParseDeviceInfo(
+			r.Header.Get("User-Agent"),
+			r.RemoteAddr,
+			r.Header.Get("X-Forwarded-For"),
+			r.Header.Get("X-Real-IP"),
+		)
+		pair, err := d.Auth.Register(r.Context(), in.Email, in.SRPSalt, in.SRPVerifier, in.BcryptSalt, cryptoSalt, device)
 		if err != nil {
 			writeAuthErr(w, err)
 			return
@@ -75,7 +81,13 @@ func loginFinalize(d Deps) http.HandlerFunc {
 			restapi.WriteValidationError(w, err)
 			return
 		}
-		result, err := d.Auth.LoginFinalize(r.Context(), in.SessionID, in.M1)
+		device := authuc.ParseDeviceInfo(
+			r.Header.Get("User-Agent"),
+			r.RemoteAddr,
+			r.Header.Get("X-Forwarded-For"),
+			r.Header.Get("X-Real-IP"),
+		)
+		result, err := d.Auth.LoginFinalize(r.Context(), in.SessionID, in.M1, device)
 		if err != nil {
 			writeAuthErr(w, err)
 			return

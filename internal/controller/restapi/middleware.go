@@ -10,11 +10,14 @@ import (
 
 type ctxKey int
 
-const ctxUserID ctxKey = iota
+const (
+	ctxUserID    ctxKey = iota
+	ctxSessionID        // device_session_id из JWT claim "sid"
+)
 
-// ParseBearerJWT — проверка access JWT (реализует pkg/jwt.Service).
+// ParseBearerJWT — проверка access JWT.
 type ParseBearerJWT interface {
-	ParseAccessToken(token string) (uuid.UUID, error)
+	ParseAccessToken(token string) (userID, deviceSessionID uuid.UUID, err error)
 }
 
 func UserIDFromContext(ctx context.Context) (uuid.UUID, bool) {
@@ -24,6 +27,15 @@ func UserIDFromContext(ctx context.Context) (uuid.UUID, bool) {
 	}
 	id, ok := v.(uuid.UUID)
 	return id, ok
+}
+
+func SessionIDFromContext(ctx context.Context) uuid.UUID {
+	v := ctx.Value(ctxSessionID)
+	if v == nil {
+		return uuid.Nil
+	}
+	id, _ := v.(uuid.UUID)
+	return id
 }
 
 // AuthMiddleware требует заголовок Authorization: Bearer <JWT>.
@@ -36,13 +48,13 @@ func AuthMiddleware(tokens ParseBearerJWT) func(http.Handler) http.Handler {
 				WriteError(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
-			raw := strings.TrimSpace(token)
-			userID, err := tokens.ParseAccessToken(raw)
+			userID, sessionID, err := tokens.ParseAccessToken(strings.TrimSpace(token))
 			if err != nil {
 				WriteError(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
 			ctx := context.WithValue(r.Context(), ctxUserID, userID)
+			ctx = context.WithValue(ctx, ctxSessionID, sessionID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
