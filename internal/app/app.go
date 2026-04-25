@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 
 	"cloud-backend/config"
 	v1 "cloud-backend/internal/controller/restapi/v1"
+	rediscache "cloud-backend/internal/repo/cache/redis"
 	"cloud-backend/internal/repo/persistent/postgres"
 	miniostore "cloud-backend/internal/repo/storage/minio"
 	authuc "cloud-backend/internal/usecase/auth"
@@ -41,10 +43,11 @@ func Run(cfg config.Config, log zerolog.Logger) error {
 		return nil
 	}
 
-	deps, err := wireDeps(ctx, cfg, log, pool)
+	deps, cleanup, err := wireDeps(ctx, cfg, log, pool)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 
 	go runSessionCleanupJob(ctx, deps.Auth.(*authuc.Service), log)
 
@@ -52,25 +55,41 @@ func Run(cfg config.Config, log zerolog.Logger) error {
 }
 
 // wireDeps строит граф зависимостей приложения поверх уже открытого пула БД.
-func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *pgxpool.Pool) (v1.Deps, error) {
+// Возвращает cleanup-функцию, закрывающую внешние соединения.
+func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *pgxpool.Pool) (v1.Deps, func(), error) {
 	store := postgres.NewStorage(pool)
 	tokens := jwtpkg.NewService([]byte(cfg.JWT.Secret), cfg.JWT.AccessTTL)
+
+	redisOpts, err := goredis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		return v1.Deps{}, func() {}, fmt.Errorf("redis url: %w", err)
+	}
+	redisClient := goredis.NewClient(redisOpts)
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		return v1.Deps{}, func() {}, fmt.Errorf("redis ping: %w", err)
+	}
+	log.Info().Str("url", cfg.RedisURL).Msg("redis connected")
+	cleanup := func() { redisClient.Close() }
+
+	blocklist := rediscache.NewSessionBlocklist(redisClient)
 
 	authSvc := &authuc.Service{
 		Users:          store,
 		Sessions:       store,
 		DeviceSessions: store,
 		Tokens:         tokens,
+		Blocklist:      blocklist,
+		AccessTTL:      cfg.JWT.AccessTTL,
 		RefreshTTL:     cfg.JWT.RefreshTTL,
 		SRPSessions:    authuc.NewSRPSessionStore(ctx),
 	}
 
 	ms, err := miniostore.NewStore(cfg.MinIO)
 	if err != nil {
-		return v1.Deps{}, fmt.Errorf("minio: %w", err)
+		return v1.Deps{}, cleanup, fmt.Errorf("minio: %w", err)
 	}
 	if err := ms.EnsureBucket(ctx); err != nil {
-		return v1.Deps{}, fmt.Errorf("minio bucket: %w", err)
+		return v1.Deps{}, cleanup, fmt.Errorf("minio bucket: %w", err)
 	}
 	storageSvc := &storageuc.Service{
 		Objects:    ms,
@@ -81,9 +100,10 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 	return v1.Deps{
 		Auth:          authSvc,
 		Tokens:        tokens,
+		Sessions:      blocklist,
 		Storage:       storageSvc,
 		RefreshCookie: cfg.RefreshCookie,
-	}, nil
+	}, cleanup, nil
 }
 
 func newHTTPServer(cfg config.Config, deps v1.Deps) *http.Server {

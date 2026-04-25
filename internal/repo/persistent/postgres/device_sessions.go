@@ -84,23 +84,46 @@ func (s *Storage) RevokeSession(ctx context.Context, id, userID uuid.UUID) error
 	return err
 }
 
-func (s *Storage) RevokeOtherSessions(ctx context.Context, userID, exceptID uuid.UUID) error {
-	_, err := s.pool.Exec(ctx,
+func (s *Storage) RevokeOtherSessions(ctx context.Context, userID, exceptID uuid.UUID) ([]uuid.UUID, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	rows, err := tx.Query(ctx,
 		`UPDATE device_sessions
 		 SET revoked_at = now()
-		 WHERE user_id = $1 AND id != $2 AND revoked_at IS NULL`,
+		 WHERE user_id = $1 AND id != $2 AND revoked_at IS NULL
+		 RETURNING id`,
 		userID, exceptID,
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	// Revoke refresh tokens for all devices that were just revoked.
-	_, err = s.pool.Exec(ctx,
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if _, err := tx.Exec(ctx,
 		`UPDATE refresh_sessions SET revoked_at = now()
 		 WHERE user_id = $1 AND device_session_id != $2 AND revoked_at IS NULL`,
 		userID, exceptID,
-	)
-	return err
+	); err != nil {
+		return nil, err
+	}
+
+	return ids, tx.Commit(ctx)
 }
 
 // RevokeOrphanedSessions revokes device sessions that have no active refresh tokens —

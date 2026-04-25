@@ -38,10 +38,19 @@ type DeviceSessionRepository interface {
 	UpdateLastActive(ctx context.Context, id uuid.UUID) error
 	ListActiveSessions(ctx context.Context, userID uuid.UUID) ([]entity.DeviceSession, error)
 	RevokeSession(ctx context.Context, id, userID uuid.UUID) error
-	RevokeOtherSessions(ctx context.Context, userID, exceptID uuid.UUID) error
+	// RevokeOtherSessions revokes all sessions except exceptID and returns their IDs
+	// so the caller can add them to the blocklist.
+	RevokeOtherSessions(ctx context.Context, userID, exceptID uuid.UUID) ([]uuid.UUID, error)
 	RevokeDeviceSessionByID(ctx context.Context, id uuid.UUID) error
 	RevokeOrphanedSessions(ctx context.Context, userID uuid.UUID) error
 	RevokeAllOrphanedSessions(ctx context.Context) error
+}
+
+// SessionBlocklist records revoked session IDs for the remaining lifetime of
+// their access tokens so the auth middleware can reject them immediately.
+type SessionBlocklist interface {
+	Block(ctx context.Context, id uuid.UUID, ttl time.Duration) error
+	BlockBatch(ctx context.Context, ids []uuid.UUID, ttl time.Duration) error
 }
 
 type TokenIssuer interface {
@@ -55,6 +64,8 @@ type Service struct {
 	Sessions       SessionRepository
 	DeviceSessions DeviceSessionRepository
 	Tokens         TokenIssuer
+	Blocklist      SessionBlocklist
+	AccessTTL      time.Duration
 	RefreshTTL     time.Duration
 	SRPSessions    *srpSessionStore
 }
@@ -271,11 +282,22 @@ func (s *Service) ListDeviceSessions(ctx context.Context, userID uuid.UUID) ([]e
 }
 
 func (s *Service) RevokeDeviceSession(ctx context.Context, userID, sessionID uuid.UUID) error {
-	return s.DeviceSessions.RevokeSession(ctx, sessionID, userID)
+	if err := s.DeviceSessions.RevokeSession(ctx, sessionID, userID); err != nil {
+		return err
+	}
+	_ = s.Blocklist.Block(ctx, sessionID, s.AccessTTL)
+	return nil
 }
 
 func (s *Service) RevokeOtherDeviceSessions(ctx context.Context, userID, currentSessionID uuid.UUID) error {
-	return s.DeviceSessions.RevokeOtherSessions(ctx, userID, currentSessionID)
+	revokedIDs, err := s.DeviceSessions.RevokeOtherSessions(ctx, userID, currentSessionID)
+	if err != nil {
+		return err
+	}
+	if len(revokedIDs) > 0 {
+		_ = s.Blocklist.BlockBatch(ctx, revokedIDs, s.AccessTTL)
+	}
+	return nil
 }
 
 // CleanOrphanedSessions удаляет все "мёртвые" device sessions по всем пользователям.

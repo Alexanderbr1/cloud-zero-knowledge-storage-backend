@@ -18,6 +18,8 @@ type Config struct {
 	DBInit      bool
 	MigrateOnly bool
 
+	RedisURL string
+
 	LogLevel string
 
 	Server        ServerConfig
@@ -85,6 +87,7 @@ func (l *loader) build() Config {
 		DatabaseURL:   l.requireStr("DATABASE_URL"),
 		DBInit:        envBool("DB_INIT", false),
 		MigrateOnly:   migrateOnly,
+		RedisURL:      l.requireStr("REDIS_URL"),
 		LogLevel:      envStr("LOG_LEVEL", "info"),
 		Server:        l.buildServer(),
 		JWT:           l.buildJWT(),

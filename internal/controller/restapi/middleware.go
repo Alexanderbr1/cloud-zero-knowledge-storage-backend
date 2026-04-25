@@ -20,6 +20,11 @@ type ParseBearerJWT interface {
 	ParseAccessToken(token string) (userID, deviceSessionID uuid.UUID, err error)
 }
 
+// SessionBlocklist проверяет, была ли сессия явно отозвана до истечения токена.
+type SessionBlocklist interface {
+	IsBlocked(ctx context.Context, id uuid.UUID) (bool, error)
+}
+
 func UserIDFromContext(ctx context.Context) (uuid.UUID, bool) {
 	v := ctx.Value(ctxUserID)
 	if v == nil {
@@ -39,7 +44,9 @@ func SessionIDFromContext(ctx context.Context) uuid.UUID {
 }
 
 // AuthMiddleware требует заголовок Authorization: Bearer <JWT>.
-func AuthMiddleware(tokens ParseBearerJWT) func(http.Handler) http.Handler {
+// Если blocklist != nil, дополнительно проверяет, не была ли сессия явно отозвана.
+// При недоступности Redis (ошибка IsBlocked) запрос пропускается — fail open.
+func AuthMiddleware(tokens ParseBearerJWT, blocklist SessionBlocklist) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authz := strings.TrimSpace(r.Header.Get("Authorization"))
@@ -52,6 +59,12 @@ func AuthMiddleware(tokens ParseBearerJWT) func(http.Handler) http.Handler {
 			if err != nil {
 				WriteError(w, http.StatusUnauthorized, "unauthorized")
 				return
+			}
+			if sessionID != uuid.Nil {
+				if blocked, err := blocklist.IsBlocked(r.Context(), sessionID); err == nil && blocked {
+					WriteError(w, http.StatusUnauthorized, "unauthorized")
+					return
+				}
 			}
 			ctx := context.WithValue(r.Context(), ctxUserID, userID)
 			ctx = context.WithValue(ctx, ctxSessionID, sessionID)

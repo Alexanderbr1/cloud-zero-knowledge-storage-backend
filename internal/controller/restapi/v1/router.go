@@ -37,6 +37,7 @@ type StorageService interface {
 type Deps struct {
 	Auth          AuthService
 	Tokens        restapi.ParseBearerJWT
+	Sessions      restapi.SessionBlocklist
 	Storage       StorageService
 	RefreshCookie config.RefreshCookieConfig
 }
@@ -53,7 +54,7 @@ func NewRouter(d Deps) chi.Router {
 	})
 
 	r.Group(func(r chi.Router) {
-		r.Use(restapi.AuthMiddleware(d.Tokens))
+		r.Use(restapi.AuthMiddleware(d.Tokens, d.Sessions))
 
 		r.Route("/auth/sessions", func(r chi.Router) {
 			r.Get("/", listSessions(d))

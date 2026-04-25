@@ -15,6 +15,15 @@ services:
       timeout: 3s
       retries: 30
 
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
   minio:
     image: quay.io/minio/minio:latest
     command: server /data --console-address ":9001"
@@ -69,6 +78,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       minio-init:
         condition: service_completed_successfully
       migrate:
@@ -87,6 +98,7 @@ services:
       MINIO_USE_SSL: "false"
       MINIO_REGION: us-east-1
       MINIO_PRESIGN_TTL: 1h
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "8080:8080"
     volumes:
