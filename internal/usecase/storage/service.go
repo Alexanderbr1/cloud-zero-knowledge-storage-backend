@@ -61,9 +61,30 @@ type ObjectStore interface {
 	RemoveObject(ctx context.Context, objectKey string) error
 }
 
+// PresignPutParams — входные данные для загрузки файла.
+type PresignPutParams struct {
+	UserID           uuid.UUID
+	FileName         string
+	ContentType      string
+	EncryptedFileKey []byte
+	FileIV           []byte
+}
+
+// RegisterBlobParams — данные для записи blob'а в БД.
+type RegisterBlobParams struct {
+	ID               uuid.UUID
+	UserID           uuid.UUID
+	FileName         string
+	ContentType      string
+	ObjectKey        string
+	UploadMethod     string
+	EncryptedFileKey []byte
+	FileIV           []byte
+}
+
 // BlobRegistry — метаданные blob'ов в БД.
 type BlobRegistry interface {
-	RegisterBlob(ctx context.Context, id, userID uuid.UUID, fileName, contentType, objectKey, uploadMethod string, encryptedFileKey, fileIV []byte) error
+	RegisterBlob(ctx context.Context, p RegisterBlobParams) error
 	GetBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (BlobMeta, bool, error)
 	// RemoveBlob атомарно удаляет запись и возвращает objectKey для последующего удаления из MinIO.
 	RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error)
@@ -71,22 +92,20 @@ type BlobRegistry interface {
 }
 
 // PresignPut создаёт запись и presigned PUT URL; ключ в бакете: blobs/<user_id>/<blob_id>.
-func (s *Service) PresignPut(ctx context.Context, userID uuid.UUID, fileName, contentType string, encryptedFileKey, fileIV []byte) (*PresignPutResult, error) {
-	if userID == uuid.Nil {
-		return nil, fmt.Errorf("presign put: empty user")
-	}
-	contentType = strings.TrimSpace(contentType)
-	if contentType == "" {
-		return nil, fmt.Errorf("presign put: empty content_type")
-	}
+func (s *Service) PresignPut(ctx context.Context, p PresignPutParams) (*PresignPutResult, error) {
+	p.ContentType = strings.TrimSpace(p.ContentType)
 	blobID := uuid.New()
-	cleanName := sanitizeFileName(fileName)
-	objectKey := fmt.Sprintf("blobs/%s/%s", userID, blobID)
+	cleanName := sanitizeFileName(p.FileName)
+	objectKey := fmt.Sprintf("blobs/%s/%s", p.UserID, blobID)
 
 	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer dbCancel()
 
-	if err := s.Blobs.RegisterBlob(dbCtx, blobID, userID, cleanName, contentType, objectKey, methodPresign, encryptedFileKey, fileIV); err != nil {
+	if err := s.Blobs.RegisterBlob(dbCtx, RegisterBlobParams{
+		ID: blobID, UserID: p.UserID, FileName: cleanName, ContentType: p.ContentType,
+		ObjectKey: objectKey, UploadMethod: methodPresign,
+		EncryptedFileKey: p.EncryptedFileKey, FileIV: p.FileIV,
+	}); err != nil {
 		return nil, fmt.Errorf("register blob: %w", err)
 	}
 
@@ -101,7 +120,7 @@ func (s *Service) PresignPut(ctx context.Context, userID uuid.UUID, fileName, co
 		UploadURL:   u.String(),
 		ExpiresIn:   int64(s.PresignTTL.Seconds()),
 		HTTPMethod:  "PUT",
-		ContentType: contentType,
+		ContentType: p.ContentType,
 	}, nil
 }
 

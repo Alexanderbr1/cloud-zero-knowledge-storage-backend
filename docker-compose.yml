@@ -59,22 +59,19 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: migrate
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      MIGRATE_ONLY: "true"
-      DB_INIT: "true"
       DATABASE_URL: postgres://cloud:cloudpass@postgres:5432/cloud?sslmode=disable
-      JWT_SECRET: dev-jwt-secret-min-32-chars-required
-    volumes:
-      - app-data:/data
     restart: "no"
 
   app:
     build:
       context: .
       dockerfile: Dockerfile
+      target: app
     depends_on:
       postgres:
         condition: service_healthy
@@ -87,7 +84,6 @@ services:
     environment:
       HTTP_ADDR: ":8080"
       LOG_LEVEL: info
-      DB_INIT: "false"
       DATABASE_URL: postgres://cloud:cloudpass@postgres:5432/cloud?sslmode=disable
       JWT_SECRET: dev-jwt-secret-min-32-chars-required
       MINIO_ENDPOINT: minio:9000

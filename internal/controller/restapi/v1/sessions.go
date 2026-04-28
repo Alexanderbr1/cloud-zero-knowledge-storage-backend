@@ -14,9 +14,8 @@ import (
 
 func listSessions(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := restapi.UserIDFromContext(r.Context())
+		userID, ok := restapi.MustUserID(w, r)
 		if !ok {
-			restapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		currentSessionID := restapi.SessionIDFromContext(r.Context())
@@ -45,9 +44,8 @@ func listSessions(d Deps) http.HandlerFunc {
 
 func revokeSession(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := restapi.UserIDFromContext(r.Context())
+		userID, ok := restapi.MustUserID(w, r)
 		if !ok {
-			restapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 
@@ -71,9 +69,8 @@ func revokeSession(d Deps) http.HandlerFunc {
 
 func revokeOtherSessions(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := restapi.UserIDFromContext(r.Context())
+		userID, ok := restapi.MustUserID(w, r)
 		if !ok {
-			restapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		currentSessionID := restapi.SessionIDFromContext(r.Context())

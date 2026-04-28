@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"cloud-backend/internal/entity"
@@ -13,16 +12,11 @@ import (
 
 var _ authuc.UserRepository = (*Storage)(nil)
 
-func (s *Storage) CreateUser(
-	ctx context.Context,
-	id uuid.UUID,
-	email, srpSalt, srpVerifier, bcryptSalt string,
-	cryptoSalt []byte,
-) error {
+func (s *Storage) CreateUser(ctx context.Context, p authuc.NewUserParams) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO users (id, email, srp_salt, srp_verifier, bcrypt_salt, crypto_salt)
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		id, email, srpSalt, srpVerifier, bcryptSalt, cryptoSalt,
+		p.ID, p.Email, p.SRPSalt, p.SRPVerifier, p.BcryptSalt, p.CryptoSalt,
 	)
 	return err
 }

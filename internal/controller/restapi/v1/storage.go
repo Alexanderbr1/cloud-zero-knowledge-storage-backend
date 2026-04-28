@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
 	"cloud-backend/internal/controller/restapi"
@@ -17,19 +15,10 @@ import (
 	storageuc "cloud-backend/internal/usecase/storage"
 )
 
-func registerStorageRoutes(r chi.Router, d Deps) {
-	r.Use(middleware.Timeout(30 * time.Minute))
-	r.Post("/presign", storagePresignPut(d))
-	r.Get("/blobs", storageListBlobs(d))
-	r.Post("/blobs/{blobID}/presign-get", storagePresignGet(d))
-	r.Delete("/blobs/{blobID}", storageDeleteBlob(d))
-}
-
 func storagePresignPut(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		uid, ok := restapi.UserIDFromContext(r.Context())
-		if !ok || uid == uuid.Nil {
-			restapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		uid, ok := restapi.MustUserID(w, r)
+		if !ok {
 			return
 		}
 		var in dto.StoragePresignPutRequest
@@ -52,8 +41,12 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid file_iv")
 			return
 		}
-		out, err := d.Storage.PresignPut(r.Context(), uid, in.FileName, in.ContentType, encryptedFileKey, fileIV)
-		if mapStorageErr(w, err) {
+		out, err := d.Storage.PresignPut(r.Context(), storageuc.PresignPutParams{
+			UserID: uid, FileName: in.FileName, ContentType: in.ContentType,
+			EncryptedFileKey: encryptedFileKey, FileIV: fileIV,
+		})
+		if err != nil {
+			writeStorageErr(w, err)
 			return
 		}
 		restapi.WriteJSON(w, http.StatusOK, dto.StoragePresignPutResponse{
@@ -69,9 +62,8 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 
 func storagePresignGet(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		uid, ok := restapi.UserIDFromContext(r.Context())
-		if !ok || uid == uuid.Nil {
-			restapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		uid, ok := restapi.MustUserID(w, r)
+		if !ok {
 			return
 		}
 		blobID, err := uuid.Parse(chi.URLParam(r, "blobID"))
@@ -80,7 +72,8 @@ func storagePresignGet(d Deps) http.HandlerFunc {
 			return
 		}
 		out, err := d.Storage.PresignGet(r.Context(), uid, blobID)
-		if mapStorageErr(w, err) {
+		if err != nil {
+			writeStorageErr(w, err)
 			return
 		}
 		restapi.WriteJSON(w, http.StatusOK, dto.StoragePresignGetResponse{
@@ -97,9 +90,8 @@ func storagePresignGet(d Deps) http.HandlerFunc {
 
 func storageDeleteBlob(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		uid, ok := restapi.UserIDFromContext(r.Context())
-		if !ok || uid == uuid.Nil {
-			restapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		uid, ok := restapi.MustUserID(w, r)
+		if !ok {
 			return
 		}
 		blobID, err := uuid.Parse(chi.URLParam(r, "blobID"))
@@ -107,7 +99,8 @@ func storageDeleteBlob(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid blob_id")
 			return
 		}
-		if err := d.Storage.DeleteBlob(r.Context(), uid, blobID); mapStorageErr(w, err) {
+		if err := d.Storage.DeleteBlob(r.Context(), uid, blobID); err != nil {
+			writeStorageErr(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -116,13 +109,13 @@ func storageDeleteBlob(d Deps) http.HandlerFunc {
 
 func storageListBlobs(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		uid, ok := restapi.UserIDFromContext(r.Context())
-		if !ok || uid == uuid.Nil {
-			restapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		uid, ok := restapi.MustUserID(w, r)
+		if !ok {
 			return
 		}
 		blobs, err := d.Storage.ListBlobs(r.Context(), uid)
-		if mapStorageErr(w, err) {
+		if err != nil {
+			writeStorageErr(w, err)
 			return
 		}
 		items := make([]dto.StorageBlobItem, 0, len(blobs))
@@ -140,14 +133,10 @@ func storageListBlobs(d Deps) http.HandlerFunc {
 	}
 }
 
-func mapStorageErr(w http.ResponseWriter, err error) bool {
-	if err == nil {
-		return false
-	}
+func writeStorageErr(w http.ResponseWriter, err error) {
 	if errors.Is(err, storageuc.ErrNotFound) {
 		restapi.WriteError(w, http.StatusNotFound, "not found")
 	} else {
 		restapi.WriteError(w, http.StatusInternalServerError, "internal error")
 	}
-	return true
 }

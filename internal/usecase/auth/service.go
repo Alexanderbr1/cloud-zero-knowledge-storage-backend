@@ -13,37 +13,87 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/rs/zerolog"
 
 	"cloud-backend/internal/entity"
 	srppkg "cloud-backend/pkg/srp"
-	"cloud-backend/pkg/useragent"
 )
+
+const dbTimeout = 5 * time.Second
+
+// dbCtx возвращает дочерний контекст с таймаутом для одного DB-запроса.
+func dbCtx(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, dbTimeout)
+}
+
+// ─── Репозитории ──────────────────────────────────────────────────────────
+
+// ─── Параметры сервиса ────────────────────────────────────────────────────
+
+type RegisterParams struct {
+	Email       string
+	SRPSalt     string
+	SRPVerifier string
+	BcryptSalt  string
+	CryptoSalt  []byte
+	Device      DeviceInfo
+}
+
+type LoginFinalizeParams struct {
+	SessionID string
+	M1        string
+	Device    DeviceInfo
+}
+
+// ─── Параметры репозиториев ───────────────────────────────────────────────
+
+type NewUserParams struct {
+	ID          uuid.UUID
+	Email       string
+	SRPSalt     string
+	SRPVerifier string
+	BcryptSalt  string
+	CryptoSalt  []byte
+}
+
+type RefreshSessionParams struct {
+	SessionID       uuid.UUID
+	UserID          uuid.UUID
+	DeviceSessionID uuid.UUID
+	TokenHash       []byte
+	ExpiresAt       time.Time
+}
+
+type ConsumedSession struct {
+	SessionID       uuid.UUID
+	UserID          uuid.UUID
+	DeviceSessionID uuid.UUID
+}
 
 // ─── Репозитории ──────────────────────────────────────────────────────────
 
 type UserRepository interface {
-	CreateUser(ctx context.Context, id uuid.UUID, email, srpSalt, srpVerifier, bcryptSalt string, cryptoSalt []byte) error
+	CreateUser(ctx context.Context, p NewUserParams) error
 	GetByEmail(ctx context.Context, email string) (entity.User, bool, error)
 }
 
 type SessionRepository interface {
-	CreateRefreshSession(ctx context.Context, sessionID, userID, deviceSessionID uuid.UUID, refreshTokenHash []byte, expiresAt time.Time) error
-	ConsumeRefreshSession(ctx context.Context, refreshTokenHash []byte) (sessionID, userID, deviceSessionID uuid.UUID, ok bool, err error)
-	RevokeRefreshSessionByHash(ctx context.Context, refreshTokenHash []byte) error
-	ConsumeAndGetDeviceSession(ctx context.Context, refreshTokenHash []byte) (uuid.UUID, error)
+	CreateRefreshSession(ctx context.Context, p RefreshSessionParams) error
+	ConsumeRefreshSession(ctx context.Context, tokenHash []byte) (ConsumedSession, bool, error)
+	ConsumeAndGetSession(ctx context.Context, tokenHash []byte) (userID, deviceSessionID uuid.UUID, err error)
 }
 
 type DeviceSessionRepository interface {
-	CreateDeviceSession(ctx context.Context, id, userID uuid.UUID, deviceName, ipAddress, userAgent string) error
+	CreateDeviceSession(ctx context.Context, id, userID uuid.UUID, device DeviceInfo) error
 	UpdateLastActive(ctx context.Context, id uuid.UUID) error
 	ListActiveSessions(ctx context.Context, userID uuid.UUID) ([]entity.DeviceSession, error)
 	RevokeSession(ctx context.Context, id, userID uuid.UUID) error
 	// RevokeOtherSessions revokes all sessions except exceptID and returns their IDs
 	// so the caller can add them to the blocklist.
 	RevokeOtherSessions(ctx context.Context, userID, exceptID uuid.UUID) ([]uuid.UUID, error)
-	RevokeDeviceSessionByID(ctx context.Context, id uuid.UUID) error
+	// RevokeOrphanedSessions revokes sessions with no active refresh tokens.
+	// Pass uuid.Nil to revoke across all users (used by the background job).
 	RevokeOrphanedSessions(ctx context.Context, userID uuid.UUID) error
-	RevokeAllOrphanedSessions(ctx context.Context) error
 }
 
 // SessionBlocklist records revoked session IDs for the remaining lifetime of
@@ -67,39 +117,15 @@ type Service struct {
 	Blocklist      SessionBlocklist
 	AccessTTL      time.Duration
 	RefreshTTL     time.Duration
-	SRPSessions    *srpSessionStore
+	SRPSessions    srpSessionManager
+	Logger         zerolog.Logger
 }
 
-// DeviceInfo — данные об устройстве, извлечённые HTTP-обработчиком из запроса.
+// DeviceInfo — данные об устройстве, передаваемые из транспортного слоя.
 type DeviceInfo struct {
 	UserAgent  string
 	IPAddress  string
-	DeviceName string // распарсенное человекочитаемое имя
-}
-
-const maxUserAgentLen = 512
-
-// ParseDeviceInfo строит DeviceInfo из заголовков HTTP.
-// User-Agent truncated to maxUserAgentLen to prevent oversized storage.
-// IP is taken from X-Forwarded-For / X-Real-IP only for display — it can be spoofed by clients
-// and must not be used for security decisions.
-func ParseDeviceInfo(userAgent, remoteAddr, xForwardedFor, xRealIP string) DeviceInfo {
-	ip := remoteAddr
-	if xff := strings.TrimSpace(xForwardedFor); xff != "" {
-		ip = strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])
-	} else if xrip := strings.TrimSpace(xRealIP); xrip != "" {
-		ip = xrip
-	} else if idx := strings.LastIndex(remoteAddr, ":"); idx > 0 {
-		ip = remoteAddr[:idx]
-	}
-	if len(userAgent) > maxUserAgentLen {
-		userAgent = userAgent[:maxUserAgentLen]
-	}
-	return DeviceInfo{
-		UserAgent:  userAgent,
-		IPAddress:  ip,
-		DeviceName: useragent.Parse(userAgent),
-	}
+	DeviceName string
 }
 
 // ─── Типы результатов ─────────────────────────────────────────────────────
@@ -127,41 +153,33 @@ type LoginFinalizeResult struct {
 
 // ─── Методы аутентификации ────────────────────────────────────────────────
 
-func (s *Service) Register(
-	ctx context.Context,
-	email, srpSalt, srpVerifier, bcryptSalt string,
-	cryptoSalt []byte,
-	device DeviceInfo,
-) (TokenPair, error) {
-	email = strings.TrimSpace(strings.ToLower(email))
-	if email == "" || srpSalt == "" || srpVerifier == "" || bcryptSalt == "" || len(cryptoSalt) == 0 {
-		return TokenPair{}, ErrInvalidInput
-	}
+func (s *Service) Register(ctx context.Context, p RegisterParams) (TokenPair, error) {
+	p.Email = strings.TrimSpace(strings.ToLower(p.Email))
 
 	id := uuid.New()
-	userCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	tctx, cancel := dbCtx(ctx)
 	defer cancel()
 
-	if err := s.Users.CreateUser(userCtx, id, email, srpSalt, srpVerifier, bcryptSalt, cryptoSalt); err != nil {
+	if err := s.Users.CreateUser(tctx, NewUserParams{
+		ID: id, Email: p.Email, SRPSalt: p.SRPSalt, SRPVerifier: p.SRPVerifier,
+		BcryptSalt: p.BcryptSalt, CryptoSalt: p.CryptoSalt,
+	}); err != nil {
 		var pe *pgconn.PgError
 		if errors.As(err, &pe) && pe.Code == pgerrcode.UniqueViolation {
 			return TokenPair{}, ErrUserExists
 		}
 		return TokenPair{}, err
 	}
-	return s.issueTokenPair(ctx, id, device)
+	return s.issueTokenPair(ctx, id, p.Device)
 }
 
 func (s *Service) LoginInit(ctx context.Context, email, aHex string) (LoginInitResult, error) {
 	email = strings.TrimSpace(strings.ToLower(email))
-	if email == "" || aHex == "" {
-		return LoginInitResult{}, ErrInvalidInput
-	}
 
-	userCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	tctx, cancel := dbCtx(ctx)
 	defer cancel()
 
-	u, ok, err := s.Users.GetByEmail(userCtx, email)
+	u, ok, err := s.Users.GetByEmail(tctx, email)
 	if err != nil {
 		return LoginInitResult{}, err
 	}
@@ -197,8 +215,8 @@ func (s *Service) LoginInit(ctx context.Context, email, aHex string) (LoginInitR
 	}, nil
 }
 
-func (s *Service) LoginFinalize(ctx context.Context, sessionID, m1Hex string, device DeviceInfo) (LoginFinalizeResult, error) {
-	sid, err := uuid.Parse(sessionID)
+func (s *Service) LoginFinalize(ctx context.Context, p LoginFinalizeParams) (LoginFinalizeResult, error) {
+	sid, err := uuid.Parse(p.SessionID)
 	if err != nil {
 		return LoginFinalizeResult{}, ErrInvalidInput
 	}
@@ -208,7 +226,7 @@ func (s *Service) LoginFinalize(ctx context.Context, sessionID, m1Hex string, de
 		return LoginFinalizeResult{}, ErrInvalidCredentials
 	}
 
-	m2Hex, err := entry.session.VerifyClientProof(entry.aHex, m1Hex, entry.email, entry.srpSaltHex)
+	m2Hex, err := entry.session.VerifyClientProof(entry.aHex, p.M1, entry.email, entry.srpSaltHex)
 	if err != nil {
 		return LoginFinalizeResult{}, ErrInvalidCredentials
 	}
@@ -217,9 +235,11 @@ func (s *Service) LoginFinalize(ctx context.Context, sessionID, m1Hex string, de
 	// Best-effort: a cleanup failure must not block login.
 	cleanCtx, cleanCancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cleanCancel()
-	_ = s.DeviceSessions.RevokeOrphanedSessions(cleanCtx, entry.userID)
+	if err := s.DeviceSessions.RevokeOrphanedSessions(cleanCtx, entry.userID); err != nil {
+		s.Logger.Warn().Err(err).Msg("orphaned session cleanup failed")
+	}
 
-	pair, err := s.issueTokenPair(ctx, entry.userID, device)
+	pair, err := s.issueTokenPair(ctx, entry.userID, p.Device)
 	if err != nil {
 		return LoginFinalizeResult{}, err
 	}
@@ -229,15 +249,11 @@ func (s *Service) LoginFinalize(ctx context.Context, sessionID, m1Hex string, de
 
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, error) {
 	refreshToken = strings.TrimSpace(refreshToken)
-	if refreshToken == "" {
-		return TokenPair{}, ErrInvalidRefresh
-	}
-
 	hash := refreshTokenHash(refreshToken)
-	sessionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	tctx, cancel := dbCtx(ctx)
 	defer cancel()
 
-	_, userID, deviceSessionID, ok, err := s.Sessions.ConsumeRefreshSession(sessionCtx, hash)
+	consumed, ok, err := s.Sessions.ConsumeRefreshSession(tctx, hash)
 	if err != nil {
 		return TokenPair{}, err
 	}
@@ -246,23 +262,22 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 	}
 
 	// Обновляем last_active_at — пользователь активен.
-	_ = s.DeviceSessions.UpdateLastActive(ctx, deviceSessionID)
+	if err := s.DeviceSessions.UpdateLastActive(ctx, consumed.DeviceSessionID); err != nil {
+		s.Logger.Warn().Err(err).Msg("update last_active_at failed")
+	}
 
-	return s.issueTokenPairForDevice(ctx, userID, deviceSessionID)
+	return s.issueTokenPairForDevice(ctx, consumed.UserID, consumed.DeviceSessionID)
 }
 
 func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 	refreshToken = strings.TrimSpace(refreshToken)
-	if refreshToken == "" {
-		return nil
-	}
 	hash := refreshTokenHash(refreshToken)
 
-	sessionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	tctx, cancel := dbCtx(ctx)
 	defer cancel()
 
-	// Атомарно отзываем refresh-токен и узнаём device_session_id.
-	deviceSessionID, err := s.Sessions.ConsumeAndGetDeviceSession(sessionCtx, hash)
+	// Атомарно отзываем refresh-токен и узнаём device_session_id + userID.
+	userID, deviceSessionID, err := s.Sessions.ConsumeAndGetSession(tctx, hash)
 	if err != nil {
 		return err
 	}
@@ -271,8 +286,7 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 		return nil
 	}
 
-	// Отзываем само устройство.
-	return s.DeviceSessions.RevokeDeviceSessionByID(ctx, deviceSessionID)
+	return s.DeviceSessions.RevokeSession(ctx, deviceSessionID, userID)
 }
 
 // ─── Управление устройствами ──────────────────────────────────────────────
@@ -285,7 +299,9 @@ func (s *Service) RevokeDeviceSession(ctx context.Context, userID, sessionID uui
 	if err := s.DeviceSessions.RevokeSession(ctx, sessionID, userID); err != nil {
 		return err
 	}
-	_ = s.Blocklist.Block(ctx, sessionID, s.AccessTTL)
+	if err := s.Blocklist.Block(ctx, sessionID, s.AccessTTL); err != nil {
+		s.Logger.Warn().Err(err).Msg("blocklist block failed")
+	}
 	return nil
 }
 
@@ -295,7 +311,9 @@ func (s *Service) RevokeOtherDeviceSessions(ctx context.Context, userID, current
 		return err
 	}
 	if len(revokedIDs) > 0 {
-		_ = s.Blocklist.BlockBatch(ctx, revokedIDs, s.AccessTTL)
+		if err := s.Blocklist.BlockBatch(ctx, revokedIDs, s.AccessTTL); err != nil {
+			s.Logger.Warn().Err(err).Msg("blocklist block_batch failed")
+		}
 	}
 	return nil
 }
@@ -303,7 +321,7 @@ func (s *Service) RevokeOtherDeviceSessions(ctx context.Context, userID, current
 // CleanOrphanedSessions удаляет все "мёртвые" device sessions по всем пользователям.
 // Предназначен для вызова фоновой джобой.
 func (s *Service) CleanOrphanedSessions(ctx context.Context) error {
-	return s.DeviceSessions.RevokeAllOrphanedSessions(ctx)
+	return s.DeviceSessions.RevokeOrphanedSessions(ctx, uuid.Nil)
 }
 
 // ─── Приватные методы ─────────────────────────────────────────────────────
@@ -311,13 +329,10 @@ func (s *Service) CleanOrphanedSessions(ctx context.Context) error {
 // issueTokenPair создаёт новое device session и выдаёт токены.
 func (s *Service) issueTokenPair(ctx context.Context, userID uuid.UUID, device DeviceInfo) (TokenPair, error) {
 	deviceSessionID := uuid.New()
-	devCtx, devCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer devCancel()
+	tctx, cancel := dbCtx(ctx)
+	defer cancel()
 
-	if err := s.DeviceSessions.CreateDeviceSession(
-		devCtx, deviceSessionID, userID,
-		device.DeviceName, device.IPAddress, device.UserAgent,
-	); err != nil {
+	if err := s.DeviceSessions.CreateDeviceSession(tctx, deviceSessionID, userID, device); err != nil {
 		return TokenPair{}, fmt.Errorf("create device session: %w", err)
 	}
 
@@ -337,10 +352,13 @@ func (s *Service) issueTokenPairForDevice(ctx context.Context, userID, deviceSes
 	sessID := uuid.New()
 	expiresAt := time.Now().Add(s.RefreshTTL)
 
-	sessCtx, sessCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer sessCancel()
+	tctx, cancel := dbCtx(ctx)
+	defer cancel()
 
-	if err := s.Sessions.CreateRefreshSession(sessCtx, sessID, userID, deviceSessionID, refreshHashBytes, expiresAt); err != nil {
+	if err := s.Sessions.CreateRefreshSession(tctx, RefreshSessionParams{
+		SessionID: sessID, UserID: userID, DeviceSessionID: deviceSessionID,
+		TokenHash: refreshHashBytes, ExpiresAt: expiresAt,
+	}); err != nil {
 		return TokenPair{}, err
 	}
 	return TokenPair{

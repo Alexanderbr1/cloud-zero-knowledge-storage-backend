@@ -24,6 +24,11 @@ import (
 	jwtpkg "cloud-backend/pkg/jwt"
 )
 
+// sessionCleaner — минимальный интерфейс для фоновой джобы очистки сессий.
+type sessionCleaner interface {
+	CleanOrphanedSessions(ctx context.Context) error
+}
+
 func Run(cfg config.Config, log zerolog.Logger) error {
 	ctx := context.Background()
 
@@ -33,40 +38,30 @@ func Run(cfg config.Config, log zerolog.Logger) error {
 	}
 	defer pool.Close()
 
-	if cfg.DBInit || cfg.MigrateOnly {
-		if err := postgres.RunMigrations(pool, log); err != nil {
-			return fmt.Errorf("migrations: %w", err)
-		}
-	}
-	if cfg.MigrateOnly {
-		log.Info().Msg("migrations applied; exiting (MIGRATE_ONLY=true)")
-		return nil
-	}
-
-	deps, cleanup, err := wireDeps(ctx, cfg, log, pool)
+	deps, cleaner, cleanup, err := wireDeps(ctx, cfg, log, pool)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	go runSessionCleanupJob(ctx, deps.Auth.(*authuc.Service), log)
+	go runSessionCleanupJob(ctx, cleaner, log)
 
-	return serve(ctx, newHTTPServer(cfg, deps), log, cfg.Server.ShutdownTimeout)
+	return serve(ctx, newHTTPServer(cfg, deps, log), log, cfg.Server.ShutdownTimeout)
 }
 
 // wireDeps строит граф зависимостей приложения поверх уже открытого пула БД.
-// Возвращает cleanup-функцию, закрывающую внешние соединения.
-func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *pgxpool.Pool) (v1.Deps, func(), error) {
+// Возвращает deps, cleaner для фоновой джобы, cleanup для внешних соединений.
+func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *pgxpool.Pool) (v1.Deps, sessionCleaner, func(), error) {
 	store := postgres.NewStorage(pool)
 	tokens := jwtpkg.NewService([]byte(cfg.JWT.Secret), cfg.JWT.AccessTTL)
 
 	redisOpts, err := goredis.ParseURL(cfg.RedisURL)
 	if err != nil {
-		return v1.Deps{}, func() {}, fmt.Errorf("redis url: %w", err)
+		return v1.Deps{}, nil, func() {}, fmt.Errorf("redis url: %w", err)
 	}
 	redisClient := goredis.NewClient(redisOpts)
 	if err := redisClient.Ping(ctx).Err(); err != nil {
-		return v1.Deps{}, func() {}, fmt.Errorf("redis ping: %w", err)
+		return v1.Deps{}, nil, func() {}, fmt.Errorf("redis ping: %w", err)
 	}
 	log.Info().Str("url", cfg.RedisURL).Msg("redis connected")
 	cleanup := func() { redisClient.Close() }
@@ -82,14 +77,15 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 		AccessTTL:      cfg.JWT.AccessTTL,
 		RefreshTTL:     cfg.JWT.RefreshTTL,
 		SRPSessions:    authuc.NewSRPSessionStore(ctx),
+		Logger:         log,
 	}
 
 	ms, err := miniostore.NewStore(cfg.MinIO)
 	if err != nil {
-		return v1.Deps{}, cleanup, fmt.Errorf("minio: %w", err)
+		return v1.Deps{}, nil, cleanup, fmt.Errorf("minio: %w", err)
 	}
 	if err := ms.EnsureBucket(ctx); err != nil {
-		return v1.Deps{}, cleanup, fmt.Errorf("minio bucket: %w", err)
+		return v1.Deps{}, nil, cleanup, fmt.Errorf("minio bucket: %w", err)
 	}
 	storageSvc := &storageuc.Service{
 		Objects:    ms,
@@ -103,20 +99,21 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 		Sessions:      blocklist,
 		Storage:       storageSvc,
 		RefreshCookie: cfg.RefreshCookie,
-	}, cleanup, nil
+		Logger:        log,
+	}, authSvc, cleanup, nil
 }
 
-func newHTTPServer(cfg config.Config, deps v1.Deps) *http.Server {
+func newHTTPServer(cfg config.Config, deps v1.Deps, log zerolog.Logger) *http.Server {
 	return &http.Server{
 		Addr:         cfg.HTTPAddr,
-		Handler:      newHTTPHandler(deps),
+		Handler:      newHTTPHandler(deps, log),
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
 		IdleTimeout:  cfg.Server.IdleTimeout,
 	}
 }
 
-func runSessionCleanupJob(ctx context.Context, svc *authuc.Service, log zerolog.Logger) {
+func runSessionCleanupJob(ctx context.Context, svc sessionCleaner, log zerolog.Logger) {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 	for {

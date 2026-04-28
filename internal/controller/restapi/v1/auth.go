@@ -29,13 +29,10 @@ func register(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid crypto_salt")
 			return
 		}
-		device := authuc.ParseDeviceInfo(
-			r.Header.Get("User-Agent"),
-			r.RemoteAddr,
-			r.Header.Get("X-Forwarded-For"),
-			r.Header.Get("X-Real-IP"),
-		)
-		pair, err := d.Auth.Register(r.Context(), in.Email, in.SRPSalt, in.SRPVerifier, in.BcryptSalt, cryptoSalt, device)
+		pair, err := d.Auth.Register(r.Context(), authuc.RegisterParams{
+			Email: in.Email, SRPSalt: in.SRPSalt, SRPVerifier: in.SRPVerifier,
+			BcryptSalt: in.BcryptSalt, CryptoSalt: cryptoSalt, Device: parseDeviceInfo(r),
+		})
 		if err != nil {
 			writeAuthErr(w, err)
 			return
@@ -81,13 +78,9 @@ func loginFinalize(d Deps) http.HandlerFunc {
 			restapi.WriteValidationError(w, err)
 			return
 		}
-		device := authuc.ParseDeviceInfo(
-			r.Header.Get("User-Agent"),
-			r.RemoteAddr,
-			r.Header.Get("X-Forwarded-For"),
-			r.Header.Get("X-Real-IP"),
-		)
-		result, err := d.Auth.LoginFinalize(r.Context(), in.SessionID, in.M1, device)
+		result, err := d.Auth.LoginFinalize(r.Context(), authuc.LoginFinalizeParams{
+			SessionID: in.SessionID, M1: in.M1, Device: parseDeviceInfo(r),
+		})
 		if err != nil {
 			writeAuthErr(w, err)
 			return
@@ -118,7 +111,9 @@ func refresh(d Deps) http.HandlerFunc {
 func logout(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rt := readRefreshToken(r, d.RefreshCookie.Name)
-		_ = d.Auth.Logout(r.Context(), rt)
+		if err := d.Auth.Logout(r.Context(), rt); err != nil {
+			d.Logger.Warn().Err(err).Msg("logout failed")
+		}
 		clearRefreshTokenCookie(w, d.RefreshCookie)
 		w.WriteHeader(http.StatusNoContent)
 	}

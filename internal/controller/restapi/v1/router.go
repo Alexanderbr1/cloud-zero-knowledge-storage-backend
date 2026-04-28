@@ -2,9 +2,12 @@ package v1
 
 import (
 	"context"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 
 	"cloud-backend/config"
 	"cloud-backend/internal/controller/restapi"
@@ -15,9 +18,9 @@ import (
 
 // AuthService — бизнес-логика аутентификации.
 type AuthService interface {
-	Register(ctx context.Context, email, srpSalt, srpVerifier, bcryptSalt string, cryptoSalt []byte, device authuc.DeviceInfo) (authuc.TokenPair, error)
+	Register(ctx context.Context, p authuc.RegisterParams) (authuc.TokenPair, error)
 	LoginInit(ctx context.Context, email, aHex string) (authuc.LoginInitResult, error)
-	LoginFinalize(ctx context.Context, sessionID, m1Hex string, device authuc.DeviceInfo) (authuc.LoginFinalizeResult, error)
+	LoginFinalize(ctx context.Context, p authuc.LoginFinalizeParams) (authuc.LoginFinalizeResult, error)
 	Refresh(ctx context.Context, refreshToken string) (authuc.TokenPair, error)
 	Logout(ctx context.Context, refreshToken string) error
 	ListDeviceSessions(ctx context.Context, userID uuid.UUID) ([]entity.DeviceSession, error)
@@ -27,7 +30,7 @@ type AuthService interface {
 
 // StorageService — бизнес-логика хранилища (реализует usecase/storage.Service).
 type StorageService interface {
-	PresignPut(ctx context.Context, userID uuid.UUID, fileName, contentType string, encryptedFileKey, fileIV []byte) (*storageuc.PresignPutResult, error)
+	PresignPut(ctx context.Context, p storageuc.PresignPutParams) (*storageuc.PresignPutResult, error)
 	PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*storageuc.PresignGetResult, error)
 	DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error
 	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
@@ -40,6 +43,7 @@ type Deps struct {
 	Sessions      restapi.SessionBlocklist
 	Storage       StorageService
 	RefreshCookie config.RefreshCookieConfig
+	Logger        zerolog.Logger
 }
 
 func NewRouter(d Deps) chi.Router {
@@ -54,19 +58,21 @@ func NewRouter(d Deps) chi.Router {
 	})
 
 	r.Group(func(r chi.Router) {
-		r.Use(restapi.AuthMiddleware(d.Tokens, d.Sessions))
+		r.Use(restapi.AuthMiddleware(d.Tokens, d.Sessions, d.Logger))
 
-		r.Route("/auth/sessions", func(r chi.Router) {
+		r.Route("/sessions", func(r chi.Router) {
 			r.Get("/", listSessions(d))
 			r.Delete("/", revokeOtherSessions(d))
 			r.Delete("/{id}", revokeSession(d))
 		})
 
-		if d.Storage != nil {
-			r.Route("/storage", func(r chi.Router) {
-				registerStorageRoutes(r, d)
-			})
-		}
+		r.Route("/storage", func(r chi.Router) {
+			r.Use(middleware.Timeout(30 * time.Minute))
+			r.Post("/presign", storagePresignPut(d))
+			r.Get("/blobs", storageListBlobs(d))
+			r.Post("/blobs/{blobID}/presign-get", storagePresignGet(d))
+			r.Delete("/blobs/{blobID}", storageDeleteBlob(d))
+		})
 	})
 
 	return r

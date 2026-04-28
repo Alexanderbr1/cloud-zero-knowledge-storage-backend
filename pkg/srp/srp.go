@@ -29,22 +29,29 @@ const nHex = "ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd1" +
 	"de2bcbf6955817183995497cea956ae515d2261898fa0510" +
 	"15728e5a8aacaa68ffffffffffffffff"
 
+// Группа RFC 5054 §A.1 — инициализируется один раз как package-level var.
+// Избегаем init(): JetBrains Go Modern Guidelines рекомендуют явную инициализацию.
 var (
-	bigN *big.Int
-	bigG *big.Int
-
-	// k = H(pad(N) || pad(g))  — SRP-6a multiplier, precomputed.
-	bigK []byte
+	bigN = mustParseBigInt(nHex)
+	bigG = big.NewInt(2)
+	// bigK = H(pad(N) || pad(g)) — SRP-6a multiplier.
+	bigK = computeGroupMultiplier()
 )
 
-func init() {
-	bigN, _ = new(big.Int).SetString(nHex, 16)
-	bigG = big.NewInt(2)
+func mustParseBigInt(hex string) *big.Int {
+	n, ok := new(big.Int).SetString(hex, 16)
+	if !ok {
+		// Недостижимо: nHex — константа времени компиляции.
+		panic("srp: invalid RFC 5054 group prime")
+	}
+	return n
+}
 
+func computeGroupMultiplier() []byte {
 	h := sha256.New()
 	h.Write(pad(bigN))
 	h.Write(pad(bigG))
-	bigK = h.Sum(nil)
+	return h.Sum(nil)
 }
 
 // pad returns x left-zero-padded to the byte length of N.

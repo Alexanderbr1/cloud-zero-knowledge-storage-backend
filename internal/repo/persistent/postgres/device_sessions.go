@@ -2,11 +2,8 @@ package postgres
 
 import (
 	"context"
-	"errors"
-	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"cloud-backend/internal/entity"
 	authuc "cloud-backend/internal/usecase/auth"
@@ -14,15 +11,11 @@ import (
 
 var _ authuc.DeviceSessionRepository = (*Storage)(nil)
 
-func (s *Storage) CreateDeviceSession(
-	ctx context.Context,
-	id, userID uuid.UUID,
-	deviceName, ipAddress, userAgent string,
-) error {
+func (s *Storage) CreateDeviceSession(ctx context.Context, id, userID uuid.UUID, device authuc.DeviceInfo) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO device_sessions (id, user_id, device_name, ip_address, user_agent)
 		 VALUES ($1, $2, $3, $4, $5)`,
-		id, userID, deviceName, ipAddress, userAgent,
+		id, userID, device.DeviceName, device.IPAddress, device.UserAgent,
 	)
 	return err
 }
@@ -126,64 +119,36 @@ func (s *Storage) RevokeOtherSessions(ctx context.Context, userID, exceptID uuid
 	return ids, tx.Commit(ctx)
 }
 
-// RevokeOrphanedSessions revokes device sessions that have no active refresh tokens —
-// those whose tokens expired naturally without an explicit logout.
+// RevokeOrphanedSessions revokes device sessions that have no active refresh tokens.
+// Pass uuid.Nil to revoke across all users (used by the background cleanup job).
 func (s *Storage) RevokeOrphanedSessions(ctx context.Context, userID uuid.UUID) error {
-	_, err := s.pool.Exec(ctx,
-		`UPDATE device_sessions
-		 SET revoked_at = now()
-		 WHERE user_id = $1
-		   AND revoked_at IS NULL
-		   AND NOT EXISTS (
-		     SELECT 1 FROM refresh_sessions rs
-		     WHERE rs.device_session_id = device_sessions.id
-		       AND rs.revoked_at IS NULL
-		       AND rs.expires_at > now()
-		   )`,
-		userID,
-	)
-	return err
-}
-
-// RevokeAllOrphanedSessions revokes orphaned sessions across all users — used by the background job.
-func (s *Storage) RevokeAllOrphanedSessions(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx,
-		`UPDATE device_sessions
-		 SET revoked_at = now()
-		 WHERE revoked_at IS NULL
-		   AND NOT EXISTS (
-		     SELECT 1 FROM refresh_sessions rs
-		     WHERE rs.device_session_id = device_sessions.id
-		       AND rs.revoked_at IS NULL
-		       AND rs.expires_at > now()
-		   )`,
-	)
-	return err
-}
-
-// GetDeviceSessionByRefreshHash возвращает device_session_id для отзыва при логауте.
-func (s *Storage) GetDeviceSessionByRefreshHash(ctx context.Context, hash []byte) (uuid.UUID, error) {
-	var id uuid.UUID
-	err := s.pool.QueryRow(ctx,
-		`SELECT device_session_id FROM refresh_sessions
-		 WHERE refresh_token_hash = $1 AND revoked_at IS NULL`,
-		hash,
-	).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, nil
+	var err error
+	if userID == uuid.Nil {
+		_, err = s.pool.Exec(ctx,
+			`UPDATE device_sessions
+			 SET revoked_at = now()
+			 WHERE revoked_at IS NULL
+			   AND NOT EXISTS (
+			     SELECT 1 FROM refresh_sessions rs
+			     WHERE rs.device_session_id = device_sessions.id
+			       AND rs.revoked_at IS NULL
+			       AND rs.expires_at > now()
+			   )`,
+		)
+	} else {
+		_, err = s.pool.Exec(ctx,
+			`UPDATE device_sessions
+			 SET revoked_at = now()
+			 WHERE user_id = $1
+			   AND revoked_at IS NULL
+			   AND NOT EXISTS (
+			     SELECT 1 FROM refresh_sessions rs
+			     WHERE rs.device_session_id = device_sessions.id
+			       AND rs.revoked_at IS NULL
+			       AND rs.expires_at > now()
+			   )`,
+			userID,
+		)
 	}
-	return id, err
-}
-
-// RevokeDeviceSessionAt используется при логауте: отзывает устройство по его ID.
-func (s *Storage) RevokeDeviceSessionByID(ctx context.Context, id uuid.UUID) error {
-	if id == uuid.Nil {
-		return nil
-	}
-	now := time.Now()
-	_, err := s.pool.Exec(ctx,
-		`UPDATE device_sessions SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL`,
-		now, id,
-	)
 	return err
 }

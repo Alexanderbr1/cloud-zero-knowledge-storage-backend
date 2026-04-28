@@ -26,13 +26,19 @@ type srpSessEntry struct {
 	expiresAt  time.Time
 }
 
+// srpSessionManager is the interface for the in-memory SRP handshake store.
+type srpSessionManager interface {
+	store(id uuid.UUID, e *srpSessEntry) bool
+	consume(id uuid.UUID) (*srpSessEntry, bool)
+}
+
 type srpSessionStore struct {
 	mu   sync.Mutex
 	data map[string]*srpSessEntry
 }
 
 // NewSRPSessionStore creates an in-memory SRP session store with TTL cleanup.
-func NewSRPSessionStore(ctx context.Context) *srpSessionStore {
+func NewSRPSessionStore(ctx context.Context) srpSessionManager {
 	st := &srpSessionStore{data: make(map[string]*srpSessEntry)}
 	go st.cleanup(ctx)
 	return st

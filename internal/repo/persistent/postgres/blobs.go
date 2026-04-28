@@ -13,16 +13,11 @@ import (
 
 var _ storageuc.BlobRegistry = (*Storage)(nil)
 
-func (s *Storage) RegisterBlob(
-	ctx context.Context,
-	id, userID uuid.UUID,
-	fileName, contentType, objectKey, uploadMethod string,
-	encryptedFileKey, fileIV []byte,
-) error {
+func (s *Storage) RegisterBlob(ctx context.Context, p storageuc.RegisterBlobParams) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO stored_blobs (id, user_id, file_name, content_type, object_key, upload_method, encrypted_file_key, file_iv)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		id, userID, fileName, contentType, objectKey, uploadMethod, encryptedFileKey, fileIV,
+		p.ID, p.UserID, p.FileName, p.ContentType, p.ObjectKey, p.UploadMethod, p.EncryptedFileKey, p.FileIV,
 	)
 	return err
 }

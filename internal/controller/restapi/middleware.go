@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 )
 
 type ctxKey int
@@ -34,6 +35,18 @@ func UserIDFromContext(ctx context.Context) (uuid.UUID, bool) {
 	return id, ok
 }
 
+// MustUserID извлекает ID аутентифицированного пользователя из контекста.
+// При отсутствии пишет 401 и возвращает false — вызывающий должен сделать return.
+// В норме не срабатывает: AuthMiddleware гарантирует наличие ID на защищённых маршрутах.
+func MustUserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, ok := UserIDFromContext(r.Context())
+	if !ok || id == uuid.Nil {
+		WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
 func SessionIDFromContext(ctx context.Context) uuid.UUID {
 	v := ctx.Value(ctxSessionID)
 	if v == nil {
@@ -45,8 +58,8 @@ func SessionIDFromContext(ctx context.Context) uuid.UUID {
 
 // AuthMiddleware требует заголовок Authorization: Bearer <JWT>.
 // Если blocklist != nil, дополнительно проверяет, не была ли сессия явно отозвана.
-// При недоступности Redis (ошибка IsBlocked) запрос пропускается — fail open.
-func AuthMiddleware(tokens ParseBearerJWT, blocklist SessionBlocklist) func(http.Handler) http.Handler {
+// При недоступности Redis (ошибка IsBlocked) запрос пропускается — fail open, ошибка логируется.
+func AuthMiddleware(tokens ParseBearerJWT, blocklist SessionBlocklist, log zerolog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authz := strings.TrimSpace(r.Header.Get("Authorization"))
@@ -61,7 +74,10 @@ func AuthMiddleware(tokens ParseBearerJWT, blocklist SessionBlocklist) func(http
 				return
 			}
 			if sessionID != uuid.Nil {
-				if blocked, err := blocklist.IsBlocked(r.Context(), sessionID); err == nil && blocked {
+				blocked, err := blocklist.IsBlocked(r.Context(), sessionID)
+				if err != nil {
+					log.Warn().Err(err).Msg("blocklist check failed; failing open")
+				} else if blocked {
 					WriteError(w, http.StatusUnauthorized, "unauthorized")
 					return
 				}
