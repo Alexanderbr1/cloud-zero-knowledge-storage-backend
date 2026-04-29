@@ -9,6 +9,27 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// RateLimiter is the interface required by RateLimitMiddleware.
+type RateLimiter interface {
+	Allow(ctx context.Context, key string) (bool, error)
+}
+
+// RateLimitMiddleware rejects requests that exceed the rate limit.
+// keyFn extracts the bucket key from the request (e.g. user ID, IP).
+// On limiter error the request is allowed through (fail open).
+func RateLimitMiddleware(rl RateLimiter, keyFn func(*http.Request) string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			allowed, _ := rl.Allow(r.Context(), keyFn(r))
+			if !allowed {
+				WriteError(w, http.StatusTooManyRequests, "rate limit exceeded")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 type ctxKey int
 
 const (

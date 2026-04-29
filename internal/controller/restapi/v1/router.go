@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -13,6 +14,7 @@ import (
 	"cloud-backend/internal/controller/restapi"
 	"cloud-backend/internal/entity"
 	authuc "cloud-backend/internal/usecase/auth"
+	sharinguc "cloud-backend/internal/usecase/sharing"
 	storageuc "cloud-backend/internal/usecase/storage"
 )
 
@@ -36,14 +38,26 @@ type StorageService interface {
 	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
 }
 
+// SharingService — бизнес-логика шаринга файлов.
+type SharingService interface {
+	GetRecipientPublicKey(ctx context.Context, email string) ([]byte, error)
+	CreateShare(ctx context.Context, p sharinguc.CreateShareParams) (entity.FileShare, error)
+	ListSharedWithMe(ctx context.Context, recipientID uuid.UUID) ([]entity.FileShare, error)
+	ListMyShares(ctx context.Context, blobID, ownerID uuid.UUID) ([]entity.FileShare, error)
+	GetSharedFile(ctx context.Context, shareID, callerID uuid.UUID) (sharinguc.SharedFileResult, error)
+	RevokeShare(ctx context.Context, shareID, ownerID uuid.UUID) error
+}
+
 // Deps — зависимости v1-роутера; все поля — интерфейсы для тестируемости.
 type Deps struct {
-	Auth          AuthService
-	Tokens        restapi.ParseBearerJWT
-	Sessions      restapi.SessionBlocklist
-	Storage       StorageService
-	RefreshCookie config.RefreshCookieConfig
-	Logger        zerolog.Logger
+	Auth                 AuthService
+	Tokens               restapi.ParseBearerJWT
+	Sessions             restapi.SessionBlocklist
+	Storage              StorageService
+	Sharing              SharingService
+	PublicKeyRateLimiter restapi.RateLimiter
+	RefreshCookie        config.RefreshCookieConfig
+	Logger               zerolog.Logger
 }
 
 func NewRouter(d Deps) chi.Router {
@@ -72,7 +86,21 @@ func NewRouter(d Deps) chi.Router {
 			r.Get("/blobs", storageListBlobs(d))
 			r.Post("/blobs/{blobID}/presign-get", storagePresignGet(d))
 			r.Delete("/blobs/{blobID}", storageDeleteBlob(d))
+			r.Get("/blobs/{blobID}/shares", listMyShares(d))
+			r.Post("/blobs/{blobID}/shares", createShare(d))
 		})
+
+		r.Route("/shares", func(r chi.Router) {
+			r.Get("/incoming", listSharedWithMe(d))
+			r.Get("/{shareID}", getSharedFile(d))
+			r.Delete("/{shareID}", revokeShare(d))
+		})
+
+		publicKeyRL := restapi.RateLimitMiddleware(d.PublicKeyRateLimiter, func(r *http.Request) string {
+			uid, _ := restapi.UserIDFromContext(r.Context())
+			return uid.String()
+		})
+		r.With(publicKeyRL).Get("/users/public-key", getRecipientPublicKey(d))
 	})
 
 	return r

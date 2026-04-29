@@ -20,6 +20,7 @@ import (
 	"cloud-backend/internal/repo/persistent/postgres"
 	miniostore "cloud-backend/internal/repo/storage/minio"
 	authuc "cloud-backend/internal/usecase/auth"
+	sharinguc "cloud-backend/internal/usecase/sharing"
 	storageuc "cloud-backend/internal/usecase/storage"
 	jwtpkg "cloud-backend/pkg/jwt"
 )
@@ -67,6 +68,7 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 	cleanup := func() { redisClient.Close() }
 
 	blocklist := rediscache.NewSessionBlocklist(redisClient)
+	publicKeyRL := rediscache.NewRateLimiter(redisClient, "rl:pubkey:", 20, time.Minute)
 
 	authSvc := &authuc.Service{
 		Users:          store,
@@ -93,13 +95,23 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 		PresignTTL: cfg.MinIO.PresignTTL,
 	}
 
+	sharingSvc := &sharinguc.Service{
+		Shares:     store,
+		Users:      store,
+		Blobs:      store,
+		Objects:    ms,
+		PresignTTL: cfg.MinIO.PresignTTL,
+	}
+
 	return v1.Deps{
-		Auth:          authSvc,
-		Tokens:        tokens,
-		Sessions:      blocklist,
-		Storage:       storageSvc,
-		RefreshCookie: cfg.RefreshCookie,
-		Logger:        log,
+		Auth:                 authSvc,
+		Tokens:               tokens,
+		Sessions:             blocklist,
+		Storage:              storageSvc,
+		Sharing:              sharingSvc,
+		PublicKeyRateLimiter: publicKeyRL,
+		RefreshCookie:        cfg.RefreshCookie,
+		Logger:               log,
 	}, authSvc, cleanup, nil
 }
 

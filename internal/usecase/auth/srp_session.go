@@ -16,14 +16,15 @@ const (
 )
 
 type srpSessEntry struct {
-	userID     uuid.UUID
-	email      string
-	srpSaltHex string // hex-encoded raw SRP salt bytes
-	aHex       string // client's public ephemeral A (hex), stored from LoginInit
-	session    *srppkg.ServerSession
-	cryptoSalt []byte
-	bcryptSalt string
-	expiresAt  time.Time
+	userID              uuid.UUID
+	email               string
+	srpSaltHex          string // hex-encoded raw SRP salt bytes
+	aHex                string // client's public ephemeral A (hex), stored from LoginInit
+	session             *srppkg.ServerSession
+	cryptoSalt          []byte
+	bcryptSalt          string
+	encryptedPrivateKey []byte // forwarded to client in LoginFinalize response
+	expiresAt           time.Time
 }
 
 // srpSessionManager is the interface for the in-memory SRP handshake store.

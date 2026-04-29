@@ -3,11 +3,13 @@ package dto
 // RegisterRequest — SRP-6a registration.
 // The client performs all bcrypt + SRP computation and sends only the derived values.
 type RegisterRequest struct {
-	Email       string `json:"email"        validate:"required,email,max=320"`
-	SRPSalt     string `json:"srp_salt"     validate:"required"`
-	SRPVerifier string `json:"srp_verifier" validate:"required"`
-	BcryptSalt  string `json:"bcrypt_salt"  validate:"required"`
-	CryptoSalt  string `json:"crypto_salt"  validate:"required"` // base64-encoded PBKDF2 salt
+	Email               string `json:"email"                 validate:"required,email,max=320"`
+	SRPSalt             string `json:"srp_salt"              validate:"required"`
+	SRPVerifier         string `json:"srp_verifier"          validate:"required"`
+	BcryptSalt          string `json:"bcrypt_salt"           validate:"required"`
+	CryptoSalt          string `json:"crypto_salt"           validate:"required"` // base64-encoded PBKDF2 salt
+	PublicKey           string `json:"public_key"            validate:"required"` // base64-encoded SPKI P-256 public key
+	EncryptedPrivateKey string `json:"encrypted_private_key" validate:"required"` // base64-encoded two-level wrapped private key
 }
 
 // LoginInitRequest — first leg of SRP-6a login.
@@ -39,4 +41,6 @@ type TokenResponse struct {
 	TokenType        string `json:"token_type"`
 	// M2 is present only in login-finalize; client must verify it.
 	M2 string `json:"M2,omitempty"`
+	// EncryptedPrivateKey is present only in login-finalize; nil for legacy accounts.
+	EncryptedPrivateKey string `json:"encrypted_private_key,omitempty"`
 }

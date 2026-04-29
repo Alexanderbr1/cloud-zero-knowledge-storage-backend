@@ -31,12 +31,14 @@ func dbCtx(parent context.Context) (context.Context, context.CancelFunc) {
 // ─── Параметры сервиса ────────────────────────────────────────────────────
 
 type RegisterParams struct {
-	Email       string
-	SRPSalt     string
-	SRPVerifier string
-	BcryptSalt  string
-	CryptoSalt  []byte
-	Device      DeviceInfo
+	Email               string
+	SRPSalt             string
+	SRPVerifier         string
+	BcryptSalt          string
+	CryptoSalt          []byte
+	PublicKey           []byte
+	EncryptedPrivateKey []byte
+	Device              DeviceInfo
 }
 
 type LoginFinalizeParams struct {
@@ -48,12 +50,14 @@ type LoginFinalizeParams struct {
 // ─── Параметры репозиториев ───────────────────────────────────────────────
 
 type NewUserParams struct {
-	ID          uuid.UUID
-	Email       string
-	SRPSalt     string
-	SRPVerifier string
-	BcryptSalt  string
-	CryptoSalt  []byte
+	ID                  uuid.UUID
+	Email               string
+	SRPSalt             string
+	SRPVerifier         string
+	BcryptSalt          string
+	CryptoSalt          []byte
+	PublicKey           []byte
+	EncryptedPrivateKey []byte
 }
 
 type RefreshSessionParams struct {
@@ -147,8 +151,9 @@ type LoginInitResult struct {
 }
 
 type LoginFinalizeResult struct {
-	M2   string
-	Pair TokenPair
+	M2                  string
+	Pair                TokenPair
+	EncryptedPrivateKey []byte
 }
 
 // ─── Методы аутентификации ────────────────────────────────────────────────
@@ -163,6 +168,7 @@ func (s *Service) Register(ctx context.Context, p RegisterParams) (TokenPair, er
 	if err := s.Users.CreateUser(tctx, NewUserParams{
 		ID: id, Email: p.Email, SRPSalt: p.SRPSalt, SRPVerifier: p.SRPVerifier,
 		BcryptSalt: p.BcryptSalt, CryptoSalt: p.CryptoSalt,
+		PublicKey: p.PublicKey, EncryptedPrivateKey: p.EncryptedPrivateKey,
 	}); err != nil {
 		var pe *pgconn.PgError
 		if errors.As(err, &pe) && pe.Code == pgerrcode.UniqueViolation {
@@ -194,14 +200,15 @@ func (s *Service) LoginInit(ctx context.Context, email, aHex string) (LoginInitR
 
 	sessionID := uuid.New()
 	if !s.SRPSessions.store(sessionID, &srpSessEntry{
-		userID:     u.ID,
-		email:      email,
-		srpSaltHex: u.SRPSalt,
-		aHex:       aHex,
-		session:    sess,
-		cryptoSalt: append([]byte(nil), u.CryptoSalt...),
-		bcryptSalt: u.BcryptSalt,
-		expiresAt:  time.Now().Add(srpSessionTTL),
+		userID:              u.ID,
+		email:               email,
+		srpSaltHex:          u.SRPSalt,
+		aHex:                aHex,
+		session:             sess,
+		cryptoSalt:          append([]byte(nil), u.CryptoSalt...),
+		bcryptSalt:          u.BcryptSalt,
+		encryptedPrivateKey: append([]byte(nil), u.EncryptedPrivateKey...),
+		expiresAt:           time.Now().Add(srpSessionTTL),
 	}) {
 		return LoginInitResult{}, fmt.Errorf("srp session store at capacity")
 	}
@@ -244,7 +251,7 @@ func (s *Service) LoginFinalize(ctx context.Context, p LoginFinalizeParams) (Log
 		return LoginFinalizeResult{}, err
 	}
 
-	return LoginFinalizeResult{M2: m2Hex, Pair: pair}, nil
+	return LoginFinalizeResult{M2: m2Hex, Pair: pair, EncryptedPrivateKey: entry.encryptedPrivateKey}, nil
 }
 
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, error) {

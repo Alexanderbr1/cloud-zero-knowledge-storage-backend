@@ -29,15 +29,29 @@ func register(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid crypto_salt")
 			return
 		}
+		publicKey, err := base64.StdEncoding.DecodeString(in.PublicKey)
+		// P-256 SPKI public key is always exactly 91 bytes.
+		if err != nil || len(publicKey) != 91 {
+			restapi.WriteError(w, http.StatusBadRequest, "invalid public_key")
+			return
+		}
+		encPrivKey, err := base64.StdEncoding.DecodeString(in.EncryptedPrivateKey)
+		// Minimum: 40 (AES-KW wrapped KWK) + 12 (GCM IV) + 1 (plaintext) + 16 (GCM tag) = 69.
+		if err != nil || len(encPrivKey) < 69 {
+			restapi.WriteError(w, http.StatusBadRequest, "invalid encrypted_private_key")
+			return
+		}
 		pair, err := d.Auth.Register(r.Context(), authuc.RegisterParams{
 			Email: in.Email, SRPSalt: in.SRPSalt, SRPVerifier: in.SRPVerifier,
-			BcryptSalt: in.BcryptSalt, CryptoSalt: cryptoSalt, Device: parseDeviceInfo(r),
+			BcryptSalt: in.BcryptSalt, CryptoSalt: cryptoSalt,
+			PublicKey: publicKey, EncryptedPrivateKey: encPrivKey,
+			Device: parseDeviceInfo(r),
 		})
 		if err != nil {
 			writeAuthErr(w, err)
 			return
 		}
-		writeTokenResponse(w, d.RefreshCookie, http.StatusCreated, pair, "")
+		writeTokenResponse(w, d.RefreshCookie, http.StatusCreated, pair, "", nil)
 	}
 }
 
@@ -85,7 +99,7 @@ func loginFinalize(d Deps) http.HandlerFunc {
 			writeAuthErr(w, err)
 			return
 		}
-		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, result.Pair, result.M2)
+		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, result.Pair, result.M2, result.EncryptedPrivateKey)
 	}
 }
 
@@ -104,7 +118,7 @@ func refresh(d Deps) http.HandlerFunc {
 			writeAuthErr(w, err)
 			return
 		}
-		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, pair, "")
+		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, pair, "", nil)
 	}
 }
 
@@ -119,20 +133,24 @@ func logout(d Deps) http.HandlerFunc {
 	}
 }
 
-func writeTokenResponse(w http.ResponseWriter, cookieCfg config.RefreshCookieConfig, status int, pair authuc.TokenPair, m2 string) {
+func writeTokenResponse(w http.ResponseWriter, cookieCfg config.RefreshCookieConfig, status int, pair authuc.TokenPair, m2 string, encPrivKey []byte) {
 	maxAge := int(pair.RefreshExpiresIn)
 	if maxAge < 0 {
 		maxAge = 0
 	}
 	setRefreshTokenCookie(w, cookieCfg, pair.RefreshToken, maxAge)
 
-	restapi.WriteJSON(w, status, dto.TokenResponse{
+	resp := dto.TokenResponse{
 		AccessToken:      pair.AccessToken,
 		ExpiresIn:        pair.AccessExpiresIn,
 		RefreshExpiresIn: pair.RefreshExpiresIn,
 		TokenType:        tokenTypeBearer,
 		M2:               m2,
-	})
+	}
+	if len(encPrivKey) > 0 {
+		resp.EncryptedPrivateKey = base64.StdEncoding.EncodeToString(encPrivKey)
+	}
+	restapi.WriteJSON(w, status, resp)
 }
 
 func writeAuthErr(w http.ResponseWriter, err error) {
