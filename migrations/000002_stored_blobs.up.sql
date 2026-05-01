@@ -1,14 +1,16 @@
--- Метаданные объектов в MinIO; MIME-тип на сервере не храним.
--- encrypted_file_key / file_iv — обязательны: шифрование на клиенте является требованием системы.
+-- Files uploaded by users. The content is stored encrypted in MinIO;
+-- only the metadata and key material are kept here.
 CREATE TABLE stored_blobs (
-  id uuid PRIMARY KEY,
-  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  file_name text NOT NULL,
-  object_key text NOT NULL UNIQUE,
-  upload_method text NOT NULL,
-  encrypted_file_key bytea NOT NULL,
-  file_iv bytea NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now()
+    id                 UUID        PRIMARY KEY,
+    user_id            UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    file_name          TEXT        NOT NULL,
+    content_type       TEXT        NOT NULL,
+    object_key         TEXT        NOT NULL UNIQUE,
+    encrypted_file_key BYTEA       NOT NULL,
+    file_iv            BYTEA       NOT NULL,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+
 );
 
-CREATE INDEX idx_stored_blobs_user_id ON stored_blobs(user_id);
+-- ListBlobs: WHERE user_id = $1 ORDER BY created_at DESC
+CREATE INDEX idx_stored_blobs_user_created ON stored_blobs (user_id, created_at DESC);

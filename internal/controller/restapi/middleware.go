@@ -14,9 +14,7 @@ type RateLimiter interface {
 	Allow(ctx context.Context, key string) (bool, error)
 }
 
-// RateLimitMiddleware rejects requests that exceed the rate limit.
-// keyFn extracts the bucket key from the request (e.g. user ID, IP).
-// On limiter error the request is allowed through (fail open).
+// RateLimitMiddleware: keyFn extracts the bucket key (e.g. user ID, IP); fails open on limiter error.
 func RateLimitMiddleware(rl RateLimiter, keyFn func(*http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -37,12 +35,10 @@ const (
 	ctxSessionID        // device_session_id из JWT claim "sid"
 )
 
-// ParseBearerJWT — проверка access JWT.
 type ParseBearerJWT interface {
 	ParseAccessToken(token string) (userID, deviceSessionID uuid.UUID, err error)
 }
 
-// SessionBlocklist проверяет, была ли сессия явно отозвана до истечения токена.
 type SessionBlocklist interface {
 	IsBlocked(ctx context.Context, id uuid.UUID) (bool, error)
 }
@@ -85,11 +81,12 @@ func AuthMiddleware(tokens ParseBearerJWT, blocklist SessionBlocklist, log zerol
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authz := strings.TrimSpace(r.Header.Get("Authorization"))
 			scheme, token, ok := strings.Cut(authz, " ")
-			if !ok || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
+			token = strings.TrimSpace(token)
+			if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
 				WriteError(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
-			userID, sessionID, err := tokens.ParseAccessToken(strings.TrimSpace(token))
+			userID, sessionID, err := tokens.ParseAccessToken(token)
 			if err != nil {
 				WriteError(w, http.StatusUnauthorized, "unauthorized")
 				return

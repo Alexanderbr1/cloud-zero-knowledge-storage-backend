@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"cloud-backend/internal/entity"
 	authuc "cloud-backend/internal/usecase/auth"
@@ -19,6 +21,12 @@ func (s *Storage) CreateUser(ctx context.Context, p authuc.NewUserParams) error 
 		p.ID, p.Email, p.SRPSalt, p.SRPVerifier, p.BcryptSalt, p.CryptoSalt,
 		nullableBytes(p.PublicKey), nullableBytes(p.EncryptedPrivateKey),
 	)
+	if err != nil {
+		var pe *pgconn.PgError
+		if errors.As(err, &pe) && pe.Code == pgerrcode.UniqueViolation {
+			return authuc.ErrUserExists
+		}
+	}
 	return err
 }
 

@@ -17,6 +17,7 @@ import (
 	"cloud-backend/config"
 	v1 "cloud-backend/internal/controller/restapi/v1"
 	rediscache "cloud-backend/internal/repo/cache/redis"
+	memoryrepo "cloud-backend/internal/repo/memory"
 	"cloud-backend/internal/repo/persistent/postgres"
 	miniostore "cloud-backend/internal/repo/storage/minio"
 	authuc "cloud-backend/internal/usecase/auth"
@@ -56,16 +57,10 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 	store := postgres.NewStorage(pool)
 	tokens := jwtpkg.NewService([]byte(cfg.JWT.Secret), cfg.JWT.AccessTTL)
 
-	redisOpts, err := goredis.ParseURL(cfg.RedisURL)
+	redisClient, cleanup, err := connectRedis(ctx, cfg.RedisURL, log)
 	if err != nil {
-		return v1.Deps{}, nil, func() {}, fmt.Errorf("redis url: %w", err)
+		return v1.Deps{}, nil, func() {}, err
 	}
-	redisClient := goredis.NewClient(redisOpts)
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		return v1.Deps{}, nil, func() {}, fmt.Errorf("redis ping: %w", err)
-	}
-	log.Info().Str("url", cfg.RedisURL).Msg("redis connected")
-	cleanup := func() { redisClient.Close() }
 
 	blocklist := rediscache.NewSessionBlocklist(redisClient)
 	publicKeyRL := rediscache.NewRateLimiter(redisClient, "rl:pubkey:", 20, time.Minute)
@@ -78,11 +73,19 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 		Blocklist:      blocklist,
 		AccessTTL:      cfg.JWT.AccessTTL,
 		RefreshTTL:     cfg.JWT.RefreshTTL,
-		SRPSessions:    authuc.NewSRPSessionStore(ctx),
+		SRPSessions:    memoryrepo.NewSRPSessionStore(ctx),
 		Logger:         log,
 	}
 
-	ms, err := miniostore.NewStore(cfg.MinIO)
+	ms, err := miniostore.NewStore(miniostore.StoreConfig{
+		Endpoint:       cfg.MinIO.Endpoint,
+		PublicEndpoint: cfg.MinIO.PublicEndpoint,
+		AccessKey:      cfg.MinIO.AccessKey,
+		SecretKey:      cfg.MinIO.SecretKey,
+		Bucket:         cfg.MinIO.Bucket,
+		UseSSL:         cfg.MinIO.UseSSL,
+		Region:         cfg.MinIO.Region,
+	})
 	if err != nil {
 		return v1.Deps{}, nil, cleanup, fmt.Errorf("minio: %w", err)
 	}
@@ -168,4 +171,17 @@ func serve(ctx context.Context, srv *http.Server, log zerolog.Logger, shutdownTi
 		log.Info().Msg("shutdown complete")
 	}
 	return nil
+}
+
+func connectRedis(ctx context.Context, redisURL string, log zerolog.Logger) (*goredis.Client, func(), error) {
+	opts, err := goredis.ParseURL(redisURL)
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("redis url: %w", err)
+	}
+	client := goredis.NewClient(opts)
+	if err := client.Ping(ctx).Err(); err != nil {
+		return nil, func() {}, fmt.Errorf("redis ping: %w", err)
+	}
+	log.Info().Str("url", redisURL).Msg("redis connected")
+	return client, func() { client.Close() }, nil
 }

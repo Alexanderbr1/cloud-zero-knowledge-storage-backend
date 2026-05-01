@@ -24,21 +24,17 @@ func register(d Deps) http.HandlerFunc {
 			restapi.WriteValidationError(w, err)
 			return
 		}
-		cryptoSalt, err := base64.StdEncoding.DecodeString(in.CryptoSalt)
-		if err != nil || len(cryptoSalt) == 0 {
-			restapi.WriteError(w, http.StatusBadRequest, "invalid crypto_salt")
+		cryptoSalt, ok := mustDecodeB64(w, in.CryptoSalt, "crypto_salt", 1, 0)
+		if !ok {
 			return
 		}
-		publicKey, err := base64.StdEncoding.DecodeString(in.PublicKey)
-		// P-256 SPKI public key is always exactly 91 bytes.
-		if err != nil || len(publicKey) != 91 {
-			restapi.WriteError(w, http.StatusBadRequest, "invalid public_key")
+		publicKey, ok := mustDecodeB64(w, in.PublicKey, "public_key", ecSpkiLen, ecSpkiLen)
+		if !ok {
 			return
 		}
-		encPrivKey, err := base64.StdEncoding.DecodeString(in.EncryptedPrivateKey)
 		// Minimum: 40 (AES-KW wrapped KWK) + 12 (GCM IV) + 1 (plaintext) + 16 (GCM tag) = 69.
-		if err != nil || len(encPrivKey) < 69 {
-			restapi.WriteError(w, http.StatusBadRequest, "invalid encrypted_private_key")
+		encPrivKey, ok := mustDecodeB64(w, in.EncryptedPrivateKey, "encrypted_private_key", 69, 0)
+		if !ok {
 			return
 		}
 		pair, err := d.Auth.Register(r.Context(), authuc.RegisterParams{

@@ -1,7 +1,14 @@
 CREATE TABLE users (
-  id uuid PRIMARY KEY,
-  email text NOT NULL UNIQUE,
-  password_hash text NOT NULL,
-  crypto_salt bytea NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now()
+    id                    UUID        PRIMARY KEY,
+    email                 TEXT        NOT NULL UNIQUE,
+    srp_salt              TEXT        NOT NULL,
+    srp_verifier          TEXT        NOT NULL,
+    bcrypt_salt           TEXT        NOT NULL,
+    crypto_salt           BYTEA       NOT NULL,
+    -- EC key pair generated client-side; NULL until the user completes first login.
+    public_key            BYTEA,
+    encrypted_private_key BYTEA,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT chk_users_email_length CHECK (char_length(email) BETWEEN 3 AND 320)
 );

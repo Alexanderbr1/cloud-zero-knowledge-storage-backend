@@ -3,7 +3,6 @@ package v1
 import (
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -12,6 +11,7 @@ import (
 
 	"cloud-backend/internal/controller/restapi"
 	"cloud-backend/internal/controller/restapi/v1/dto"
+	"cloud-backend/internal/entity"
 	storageuc "cloud-backend/internal/usecase/storage"
 )
 
@@ -50,12 +50,11 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 			return
 		}
 		restapi.WriteJSON(w, http.StatusOK, dto.StoragePresignPutResponse{
-			BlobID:       out.BlobID.String(),
-			UploadURL:    out.UploadURL,
-			ExpiresIn:    out.ExpiresIn,
-			HTTPMethod:   out.HTTPMethod,
-			ContentType:  out.ContentType,
-			Instructions: fmt.Sprintf("PUT encrypted file bytes to upload_url; set header Content-Type: %s", out.ContentType),
+			BlobID:      out.BlobID.String(),
+			UploadURL:   out.UploadURL,
+			ExpiresIn:   out.ExpiresIn,
+			HTTPMethod:  out.HTTPMethod,
+			ContentType: out.ContentType,
 		})
 	}
 }
@@ -120,16 +119,20 @@ func storageListBlobs(d Deps) http.HandlerFunc {
 		}
 		items := make([]dto.StorageBlobItem, 0, len(blobs))
 		for _, b := range blobs {
-			items = append(items, dto.StorageBlobItem{
-				BlobID:           b.ID.String(),
-				FileName:         b.FileName,
-				ContentType:      b.ContentType,
-				CreatedAt:        b.CreatedAt,
-				EncryptedFileKey: base64.StdEncoding.EncodeToString(b.EncryptedFileKey),
-				FileIV:           base64.StdEncoding.EncodeToString(b.FileIV),
-			})
+			items = append(items, blobToDTO(b))
 		}
 		restapi.WriteJSON(w, http.StatusOK, dto.StorageListBlobsResponse{Items: items})
+	}
+}
+
+func blobToDTO(b entity.Blob) dto.StorageBlobItem {
+	return dto.StorageBlobItem{
+		BlobID:           b.ID.String(),
+		FileName:         b.FileName,
+		ContentType:      b.ContentType,
+		CreatedAt:        b.CreatedAt,
+		EncryptedFileKey: base64.StdEncoding.EncodeToString(b.EncryptedFileKey),
+		FileIV:           base64.StdEncoding.EncodeToString(b.FileIV),
 	}
 }
 

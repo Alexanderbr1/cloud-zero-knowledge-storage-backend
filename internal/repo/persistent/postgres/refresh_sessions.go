@@ -21,8 +21,7 @@ func (s *Storage) CreateRefreshSession(ctx context.Context, p authuc.RefreshSess
 	return err
 }
 
-// ConsumeRefreshSession атомарно отзывает валидную сессию (single-use) и возвращает userID + deviceSessionID.
-// Также проверяет, что device_session не отозвана — иначе токен считается невалидным.
+// ConsumeRefreshSession rejects tokens whose device session was separately revoked.
 func (s *Storage) ConsumeRefreshSession(ctx context.Context, tokenHash []byte) (authuc.ConsumedSession, bool, error) {
 	var cs authuc.ConsumedSession
 	err := s.pool.QueryRow(ctx,
@@ -46,8 +45,6 @@ func (s *Storage) ConsumeRefreshSession(ctx context.Context, tokenHash []byte) (
 	return cs, true, nil
 }
 
-// ConsumeAndGetSession атомарно отзывает refresh-токен и возвращает userID + deviceSessionID.
-// Используется при логауте.
 func (s *Storage) ConsumeAndGetSession(ctx context.Context, refreshTokenHash []byte) (userID, deviceSessionID uuid.UUID, err error) {
 	err = s.pool.QueryRow(ctx,
 		`UPDATE refresh_sessions

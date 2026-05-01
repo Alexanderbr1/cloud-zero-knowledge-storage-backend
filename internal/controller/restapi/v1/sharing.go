@@ -69,14 +69,12 @@ func createShare(d Deps) http.HandlerFunc {
 			return
 		}
 
-		ephemeralPub, err := base64.StdEncoding.DecodeString(in.EphemeralPub)
-		if err != nil || len(ephemeralPub) != ecSpkiLen {
-			restapi.WriteError(w, http.StatusBadRequest, "invalid ephemeral_pub")
+		ephemeralPub, ok := mustDecodeB64(w, in.EphemeralPub, "ephemeral_pub", ecSpkiLen, ecSpkiLen)
+		if !ok {
 			return
 		}
-		wrappedFileKey, err := base64.StdEncoding.DecodeString(in.WrappedFileKey)
-		if err != nil || len(wrappedFileKey) != aesKwWrappedLen {
-			restapi.WriteError(w, http.StatusBadRequest, "invalid wrapped_file_key")
+		wrappedFileKey, ok := mustDecodeB64(w, in.WrappedFileKey, "wrapped_file_key", aesKwWrappedLen, aesKwWrappedLen)
+		if !ok {
 			return
 		}
 
@@ -189,7 +187,7 @@ func revokeShare(d Deps) http.HandlerFunc {
 	}
 }
 
-func shareToDTO(s entity.FileShare, downloadURL, fileIVB64 string) dto.ShareResponse {
+func shareToDTO(s entity.FileShareView, downloadURL, fileIVB64 string) dto.ShareResponse {
 	resp := dto.ShareResponse{
 		ShareID:         s.ID.String(),
 		BlobID:          s.BlobID.String(),

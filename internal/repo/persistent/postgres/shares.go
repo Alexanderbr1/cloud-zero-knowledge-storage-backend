@@ -58,8 +58,8 @@ func (s *Storage) GetBlobInfo(ctx context.Context, blobID uuid.UUID) (sharinguc.
 
 // ─── ShareRepository ──────────────────────────────────────────────────────
 
-func (s *Storage) CreateShare(ctx context.Context, p sharinguc.CreateShareParams) (entity.FileShare, error) {
-	var share entity.FileShare
+func (s *Storage) CreateShare(ctx context.Context, p sharinguc.CreateShareParams) (entity.FileShareView, error) {
+	var share entity.FileShareView
 	err := s.pool.QueryRow(ctx,
 		`WITH inserted AS (
 		     INSERT INTO file_shares (blob_id, owner_id, recipient_id, ephemeral_pub, wrapped_file_key, expires_at)
@@ -82,15 +82,15 @@ func (s *Storage) CreateShare(ctx context.Context, p sharinguc.CreateShareParams
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
-			return entity.FileShare{}, sharinguc.ErrDuplicateShare
+			return entity.FileShareView{}, sharinguc.ErrDuplicateShare
 		}
-		return entity.FileShare{}, err
+		return entity.FileShareView{}, err
 	}
 	return share, nil
 }
 
-func (s *Storage) GetShare(ctx context.Context, shareID uuid.UUID) (entity.FileShare, bool, error) {
-	var share entity.FileShare
+func (s *Storage) GetShare(ctx context.Context, shareID uuid.UUID) (entity.FileShareView, bool, error) {
+	var share entity.FileShareView
 	err := s.pool.QueryRow(ctx,
 		`SELECT fs.id, fs.blob_id, fs.owner_id, fs.recipient_id,
 		        fs.ephemeral_pub, fs.wrapped_file_key, fs.expires_at, fs.revoked_at, fs.created_at,
@@ -107,15 +107,15 @@ func (s *Storage) GetShare(ctx context.Context, shareID uuid.UUID) (entity.FileS
 		&share.BlobFileName, &share.BlobContentType, &share.OwnerEmail, &share.RecipientEmail,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return entity.FileShare{}, false, nil
+		return entity.FileShareView{}, false, nil
 	}
 	if err != nil {
-		return entity.FileShare{}, false, err
+		return entity.FileShareView{}, false, err
 	}
 	return share, true, nil
 }
 
-func (s *Storage) ListSharedWithUser(ctx context.Context, recipientID uuid.UUID) ([]entity.FileShare, error) {
+func (s *Storage) ListSharedWithUser(ctx context.Context, recipientID uuid.UUID) ([]entity.FileShareView, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT fs.id, fs.blob_id, fs.owner_id, fs.recipient_id,
 		        fs.ephemeral_pub, fs.wrapped_file_key, fs.expires_at, fs.revoked_at, fs.created_at,
@@ -135,9 +135,9 @@ func (s *Storage) ListSharedWithUser(ctx context.Context, recipientID uuid.UUID)
 	}
 	defer rows.Close()
 
-	var out []entity.FileShare
+	var out []entity.FileShareView
 	for rows.Next() {
-		var fs entity.FileShare
+		var fs entity.FileShareView
 		if err := rows.Scan(
 			&fs.ID, &fs.BlobID, &fs.OwnerID, &fs.RecipientID,
 			&fs.EphemeralPub, &fs.WrappedFileKey, &fs.ExpiresAt, &fs.RevokedAt, &fs.CreatedAt,
@@ -150,7 +150,7 @@ func (s *Storage) ListSharedWithUser(ctx context.Context, recipientID uuid.UUID)
 	return out, rows.Err()
 }
 
-func (s *Storage) ListSharesForBlob(ctx context.Context, blobID, ownerID uuid.UUID) ([]entity.FileShare, error) {
+func (s *Storage) ListSharesForBlob(ctx context.Context, blobID, ownerID uuid.UUID) ([]entity.FileShareView, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT fs.id, fs.blob_id, fs.owner_id, fs.recipient_id,
 		        fs.ephemeral_pub, fs.wrapped_file_key, fs.expires_at, fs.revoked_at, fs.created_at,
@@ -169,9 +169,9 @@ func (s *Storage) ListSharesForBlob(ctx context.Context, blobID, ownerID uuid.UU
 	}
 	defer rows.Close()
 
-	var out []entity.FileShare
+	var out []entity.FileShareView
 	for rows.Next() {
-		var fs entity.FileShare
+		var fs entity.FileShareView
 		if err := rows.Scan(
 			&fs.ID, &fs.BlobID, &fs.OwnerID, &fs.RecipientID,
 			&fs.EphemeralPub, &fs.WrappedFileKey, &fs.ExpiresAt, &fs.RevokedAt, &fs.CreatedAt,

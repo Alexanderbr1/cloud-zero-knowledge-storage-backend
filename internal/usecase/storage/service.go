@@ -13,9 +13,6 @@ import (
 	"cloud-backend/internal/entity"
 )
 
-const methodPresign = "presigned_put"
-
-// Service — загрузка файлов в объектное хранилище.
 type Service struct {
 	Objects ObjectStore
 	Blobs   BlobRegistry
@@ -23,7 +20,6 @@ type Service struct {
 	PresignTTL time.Duration
 }
 
-// PresignPutResult — клиент выполняет PUT по UploadURL (тело = файл).
 type PresignPutResult struct {
 	BlobID      uuid.UUID
 	ObjectKey   string
@@ -33,7 +29,6 @@ type PresignPutResult struct {
 	ContentType string
 }
 
-// PresignGetResult — клиент выполняет GET по DownloadURL (тело = файл).
 type PresignGetResult struct {
 	BlobID           uuid.UUID
 	ObjectKey        string
@@ -45,7 +40,6 @@ type PresignGetResult struct {
 	FileIV           []byte
 }
 
-// BlobMeta — объектный ключ и крипто-поля blob'а.
 type BlobMeta struct {
 	ObjectKey        string
 	ContentType      string
@@ -53,7 +47,6 @@ type BlobMeta struct {
 	FileIV           []byte
 }
 
-// ObjectStore — S3-совместимое объектное хранилище.
 type ObjectStore interface {
 	EnsureBucket(ctx context.Context) error
 	PresignedPutObject(ctx context.Context, objectKey string, expiry time.Duration) (*url.URL, error)
@@ -61,7 +54,6 @@ type ObjectStore interface {
 	RemoveObject(ctx context.Context, objectKey string) error
 }
 
-// PresignPutParams — входные данные для загрузки файла.
 type PresignPutParams struct {
 	UserID           uuid.UUID
 	FileName         string
@@ -70,19 +62,16 @@ type PresignPutParams struct {
 	FileIV           []byte
 }
 
-// RegisterBlobParams — данные для записи blob'а в БД.
 type RegisterBlobParams struct {
 	ID               uuid.UUID
 	UserID           uuid.UUID
 	FileName         string
 	ContentType      string
 	ObjectKey        string
-	UploadMethod     string
 	EncryptedFileKey []byte
 	FileIV           []byte
 }
 
-// BlobRegistry — метаданные blob'ов в БД.
 type BlobRegistry interface {
 	RegisterBlob(ctx context.Context, p RegisterBlobParams) error
 	GetBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (BlobMeta, bool, error)
@@ -91,7 +80,7 @@ type BlobRegistry interface {
 	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
 }
 
-// PresignPut создаёт запись и presigned PUT URL; ключ в бакете: blobs/<user_id>/<blob_id>.
+// PresignPut: object key format — blobs/<user_id>/<blob_id>.
 func (s *Service) PresignPut(ctx context.Context, p PresignPutParams) (*PresignPutResult, error) {
 	p.ContentType = strings.TrimSpace(p.ContentType)
 	blobID := uuid.New()
@@ -103,8 +92,7 @@ func (s *Service) PresignPut(ctx context.Context, p PresignPutParams) (*PresignP
 
 	if err := s.Blobs.RegisterBlob(dbCtx, RegisterBlobParams{
 		ID: blobID, UserID: p.UserID, FileName: cleanName, ContentType: p.ContentType,
-		ObjectKey: objectKey, UploadMethod: methodPresign,
-		EncryptedFileKey: p.EncryptedFileKey, FileIV: p.FileIV,
+		ObjectKey: objectKey, EncryptedFileKey: p.EncryptedFileKey, FileIV: p.FileIV,
 	}); err != nil {
 		return nil, fmt.Errorf("register blob: %w", err)
 	}
@@ -190,10 +178,12 @@ func sanitizeFileName(name string) string {
 	if name == "" {
 		return "file.bin"
 	}
+	// filepath.Base strips all leading path segments on Unix ('/' separator).
+	// Backslashes are not path separators on Linux, so replace them explicitly
+	// to handle filenames coming from Windows clients.
 	name = filepath.Base(name)
-	name = strings.ReplaceAll(name, "/", "_")
 	name = strings.ReplaceAll(name, "\\", "_")
-	if name == "." || name == ".." || name == "" {
+	if name == "." || name == ".." {
 		return "file.bin"
 	}
 	return name

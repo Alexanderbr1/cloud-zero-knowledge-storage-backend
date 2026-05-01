@@ -41,9 +41,9 @@ type StorageService interface {
 // SharingService — бизнес-логика шаринга файлов.
 type SharingService interface {
 	GetRecipientPublicKey(ctx context.Context, email string) ([]byte, error)
-	CreateShare(ctx context.Context, p sharinguc.CreateShareParams) (entity.FileShare, error)
-	ListSharedWithMe(ctx context.Context, recipientID uuid.UUID) ([]entity.FileShare, error)
-	ListMyShares(ctx context.Context, blobID, ownerID uuid.UUID) ([]entity.FileShare, error)
+	CreateShare(ctx context.Context, p sharinguc.CreateShareParams) (entity.FileShareView, error)
+	ListSharedWithMe(ctx context.Context, recipientID uuid.UUID) ([]entity.FileShareView, error)
+	ListMyShares(ctx context.Context, blobID, ownerID uuid.UUID) ([]entity.FileShareView, error)
 	GetSharedFile(ctx context.Context, shareID, callerID uuid.UUID) (sharinguc.SharedFileResult, error)
 	RevokeShare(ctx context.Context, shareID, ownerID uuid.UUID) error
 }

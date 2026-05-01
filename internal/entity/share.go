@@ -18,7 +18,12 @@ type FileShare struct {
 	ExpiresAt      *time.Time
 	RevokedAt      *time.Time
 	CreatedAt      time.Time
-	// Populated in list queries for display purposes.
+}
+
+// FileShareView is a denormalized read model that adds display-only fields
+// (populated via SQL JOINs) to the core FileShare entity.
+type FileShareView struct {
+	FileShare
 	BlobFileName    string
 	BlobContentType string
 	OwnerEmail      string

@@ -21,10 +21,10 @@ func dbCtx(parent context.Context) (context.Context, context.CancelFunc) {
 // ─── Repository interfaces ────────────────────────────────────────────────
 
 type ShareRepository interface {
-	CreateShare(ctx context.Context, p CreateShareParams) (entity.FileShare, error)
-	GetShare(ctx context.Context, shareID uuid.UUID) (entity.FileShare, bool, error)
-	ListSharedWithUser(ctx context.Context, recipientID uuid.UUID) ([]entity.FileShare, error)
-	ListSharesForBlob(ctx context.Context, blobID, ownerID uuid.UUID) ([]entity.FileShare, error)
+	CreateShare(ctx context.Context, p CreateShareParams) (entity.FileShareView, error)
+	GetShare(ctx context.Context, shareID uuid.UUID) (entity.FileShareView, bool, error)
+	ListSharedWithUser(ctx context.Context, recipientID uuid.UUID) ([]entity.FileShareView, error)
+	ListSharesForBlob(ctx context.Context, blobID, ownerID uuid.UUID) ([]entity.FileShareView, error)
 	RevokeShare(ctx context.Context, shareID, ownerID uuid.UUID) error
 }
 
@@ -64,7 +64,7 @@ type CreateShareParams struct {
 }
 
 type SharedFileResult struct {
-	Share       entity.FileShare
+	Share       entity.FileShareView
 	DownloadURL string
 	FileIV      []byte
 	FileName    string
@@ -98,7 +98,7 @@ func (s *Service) GetRecipientPublicKey(ctx context.Context, email string) ([]by
 // CreateShare stores a new file share record.
 // The caller (owner) must already own the blob; the wrapped file key must have
 // been derived client-side using ECIES (ephemeral ECDH + HKDF + AES-KW).
-func (s *Service) CreateShare(ctx context.Context, p CreateShareParams) (entity.FileShare, error) {
+func (s *Service) CreateShare(ctx context.Context, p CreateShareParams) (entity.FileShareView, error) {
 	p.RecipientEmail = strings.TrimSpace(strings.ToLower(p.RecipientEmail))
 	tctx, cancel := dbCtx(ctx)
 	defer cancel()
@@ -106,10 +106,10 @@ func (s *Service) CreateShare(ctx context.Context, p CreateShareParams) (entity.
 	// Verify blob exists and belongs to the owner.
 	info, ok, err := s.Blobs.GetBlobInfo(tctx, p.BlobID)
 	if err != nil {
-		return entity.FileShare{}, fmt.Errorf("get blob: %w", err)
+		return entity.FileShareView{}, fmt.Errorf("get blob: %w", err)
 	}
 	if !ok || info.OwnerID != p.OwnerID {
-		return entity.FileShare{}, ErrNotFound
+		return entity.FileShareView{}, ErrNotFound
 	}
 
 	tctx2, cancel2 := dbCtx(ctx)
@@ -118,10 +118,10 @@ func (s *Service) CreateShare(ctx context.Context, p CreateShareParams) (entity.
 	// Verify recipient exists and has a public key, and get their ID in one query.
 	_, recipientID, err := s.Users.GetPublicKeyByEmail(tctx2, p.RecipientEmail)
 	if err != nil {
-		return entity.FileShare{}, err
+		return entity.FileShareView{}, err
 	}
 	if recipientID == p.OwnerID {
-		return entity.FileShare{}, ErrSelfShare
+		return entity.FileShareView{}, ErrSelfShare
 	}
 
 	tctx3, cancel3 := dbCtx(ctx)
@@ -150,14 +150,8 @@ func (s *Service) GetSharedFile(ctx context.Context, shareID, callerID uuid.UUID
 	if !ok {
 		return SharedFileResult{}, ErrNotFound
 	}
-	if share.RecipientID != callerID {
-		return SharedFileResult{}, ErrForbidden
-	}
-	if share.RevokedAt != nil {
-		return SharedFileResult{}, ErrRevoked
-	}
-	if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
-		return SharedFileResult{}, ErrExpired
+	if err := validateShareAccess(share, callerID); err != nil {
+		return SharedFileResult{}, err
 	}
 
 	tctx2, cancel2 := dbCtx(ctx)
@@ -185,8 +179,21 @@ func (s *Service) GetSharedFile(ctx context.Context, shareID, callerID uuid.UUID
 	}, nil
 }
 
+func validateShareAccess(share entity.FileShareView, callerID uuid.UUID) error {
+	if share.RecipientID != callerID {
+		return ErrForbidden
+	}
+	if share.RevokedAt != nil {
+		return ErrRevoked
+	}
+	if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
+		return ErrExpired
+	}
+	return nil
+}
+
 // ListSharedWithMe returns all active shares where the caller is the recipient.
-func (s *Service) ListSharedWithMe(ctx context.Context, recipientID uuid.UUID) ([]entity.FileShare, error) {
+func (s *Service) ListSharedWithMe(ctx context.Context, recipientID uuid.UUID) ([]entity.FileShareView, error) {
 	tctx, cancel := dbCtx(ctx)
 	defer cancel()
 
@@ -198,7 +205,7 @@ func (s *Service) ListSharedWithMe(ctx context.Context, recipientID uuid.UUID) (
 }
 
 // ListMyShares returns shares the owner created for a specific blob.
-func (s *Service) ListMyShares(ctx context.Context, blobID, ownerID uuid.UUID) ([]entity.FileShare, error) {
+func (s *Service) ListMyShares(ctx context.Context, blobID, ownerID uuid.UUID) ([]entity.FileShareView, error) {
 	tctx, cancel := dbCtx(ctx)
 	defer cancel()
 
@@ -213,9 +220,5 @@ func (s *Service) ListMyShares(ctx context.Context, blobID, ownerID uuid.UUID) (
 func (s *Service) RevokeShare(ctx context.Context, shareID, ownerID uuid.UUID) error {
 	tctx, cancel := dbCtx(ctx)
 	defer cancel()
-
-	if err := s.Shares.RevokeShare(tctx, shareID, ownerID); err != nil {
-		return err
-	}
-	return nil
+	return s.Shares.RevokeShare(tctx, shareID, ownerID)
 }

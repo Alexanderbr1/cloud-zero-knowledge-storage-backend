@@ -10,10 +10,18 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-
-	"cloud-backend/config"
-	storageuc "cloud-backend/internal/usecase/storage"
 )
+
+// StoreConfig holds connection parameters for the MinIO / S3-compatible store.
+type StoreConfig struct {
+	Endpoint       string
+	PublicEndpoint string
+	AccessKey      string
+	SecretKey      string
+	Bucket         string
+	UseSSL         bool
+	Region         string
+}
 
 // Store — MinIO / S3-совместимый ObjectStore.
 type Store struct {
@@ -22,9 +30,7 @@ type Store struct {
 	bucket        string
 }
 
-var _ storageuc.ObjectStore = (*Store)(nil)
-
-func NewStore(cfg config.MinIOConfig) (*Store, error) {
+func NewStore(cfg StoreConfig) (*Store, error) {
 	if cfg.Endpoint == "" {
 		return nil, fmt.Errorf("minio: empty endpoint")
 	}

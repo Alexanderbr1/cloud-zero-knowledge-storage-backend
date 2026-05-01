@@ -68,7 +68,6 @@ func (s *Storage) RevokeSession(ctx context.Context, id, userID uuid.UUID) error
 	if tag.RowsAffected() == 0 {
 		return authuc.ErrSessionNotFound
 	}
-	// Revoke all refresh tokens for this device so they cannot be used after session revocation.
 	_, err = s.pool.Exec(ctx,
 		`UPDATE refresh_sessions SET revoked_at = now()
 		 WHERE device_session_id = $1 AND revoked_at IS NULL`,
@@ -94,15 +93,18 @@ func (s *Storage) RevokeOtherSessions(ctx context.Context, userID, exceptID uuid
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
+
 	var ids []uuid.UUID
 	for rows.Next() {
 		var id uuid.UUID
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
 			return nil, err
 		}
 		ids = append(ids, id)
 	}
+	// Close explicitly before the next query on the same transaction;
+	// defer is a safety net for early-return paths only.
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -119,36 +121,27 @@ func (s *Storage) RevokeOtherSessions(ctx context.Context, userID, exceptID uuid
 	return ids, tx.Commit(ctx)
 }
 
-// RevokeOrphanedSessions revokes device sessions that have no active refresh tokens.
-// Pass uuid.Nil to revoke across all users (used by the background cleanup job).
-func (s *Storage) RevokeOrphanedSessions(ctx context.Context, userID uuid.UUID) error {
-	var err error
-	if userID == uuid.Nil {
-		_, err = s.pool.Exec(ctx,
-			`UPDATE device_sessions
-			 SET revoked_at = now()
-			 WHERE revoked_at IS NULL
-			   AND NOT EXISTS (
-			     SELECT 1 FROM refresh_sessions rs
-			     WHERE rs.device_session_id = device_sessions.id
-			       AND rs.revoked_at IS NULL
-			       AND rs.expires_at > now()
-			   )`,
-		)
-	} else {
-		_, err = s.pool.Exec(ctx,
-			`UPDATE device_sessions
-			 SET revoked_at = now()
-			 WHERE user_id = $1
-			   AND revoked_at IS NULL
-			   AND NOT EXISTS (
-			     SELECT 1 FROM refresh_sessions rs
-			     WHERE rs.device_session_id = device_sessions.id
-			       AND rs.revoked_at IS NULL
-			       AND rs.expires_at > now()
-			   )`,
-			userID,
-		)
-	}
+const revokeOrphanedCond = `
+	AND NOT EXISTS (
+	  SELECT 1 FROM refresh_sessions rs
+	  WHERE rs.device_session_id = device_sessions.id
+	    AND rs.revoked_at IS NULL
+	    AND rs.expires_at > now()
+	)`
+
+func (s *Storage) RevokeOrphanedSessions(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE device_sessions SET revoked_at = now()
+		 WHERE revoked_at IS NULL`+revokeOrphanedCond,
+	)
+	return err
+}
+
+func (s *Storage) RevokeUserOrphanedSessions(ctx context.Context, userID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE device_sessions SET revoked_at = now()
+		 WHERE user_id = $1 AND revoked_at IS NULL`+revokeOrphanedCond,
+		userID,
+	)
 	return err
 }

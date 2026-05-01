@@ -30,8 +30,12 @@ func (r *RateLimiter) Allow(ctx context.Context, key string) (bool, error) {
 		return true, err // fail open
 	}
 	if count == 1 {
-		// Set TTL only on the first increment so the window resets naturally.
-		r.client.Expire(ctx, fullKey, r.window)
+		// Set TTL only on first increment so the window resets naturally.
+		// Treat a failed Expire as a transient error and fail open rather than
+		// blocking the key forever.
+		if err := r.client.Expire(ctx, fullKey, r.window).Err(); err != nil {
+			return true, err
+		}
 	}
 	return count <= r.limit, nil
 }

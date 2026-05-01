@@ -9,6 +9,7 @@ import (
 
 	"cloud-backend/internal/controller/restapi"
 	"cloud-backend/internal/controller/restapi/v1/dto"
+	"cloud-backend/internal/entity"
 	authuc "cloud-backend/internal/usecase/auth"
 )
 
@@ -28,15 +29,7 @@ func listSessions(d Deps) http.HandlerFunc {
 
 		out := make([]dto.DeviceSessionDTO, 0, len(sessions))
 		for _, s := range sessions {
-			out = append(out, dto.DeviceSessionDTO{
-				ID:           s.ID,
-				DeviceName:   s.DeviceName,
-				IPAddress:    s.IPAddress,
-				UserAgent:    s.UserAgent,
-				CreatedAt:    s.CreatedAt,
-				LastActiveAt: s.LastActiveAt,
-				IsCurrent:    s.ID == currentSessionID,
-			})
+			out = append(out, sessionToDTO(s, currentSessionID))
 		}
 		restapi.WriteJSON(w, http.StatusOK, dto.ListSessionsResponse{Sessions: out})
 	}
@@ -80,5 +73,17 @@ func revokeOtherSessions(d Deps) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func sessionToDTO(s entity.DeviceSession, currentID uuid.UUID) dto.DeviceSessionDTO {
+	return dto.DeviceSessionDTO{
+		ID:           s.ID,
+		DeviceName:   s.DeviceName,
+		IPAddress:    s.IPAddress,
+		UserAgent:    s.UserAgent,
+		CreatedAt:    s.CreatedAt,
+		LastActiveAt: s.LastActiveAt,
+		IsCurrent:    s.ID == currentID,
 	}
 }
