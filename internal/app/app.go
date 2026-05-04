@@ -95,6 +95,7 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 	storageSvc := &storageuc.Service{
 		Objects:    ms,
 		Blobs:      store,
+		Folders:    store,
 		PresignTTL: cfg.MinIO.PresignTTL,
 	}
 

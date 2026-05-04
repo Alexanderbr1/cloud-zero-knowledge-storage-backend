@@ -8,8 +8,7 @@ CREATE TABLE stored_blobs (
     object_key         TEXT        NOT NULL UNIQUE,
     encrypted_file_key BYTEA       NOT NULL,
     file_iv            BYTEA       NOT NULL,
-    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ListBlobs: WHERE user_id = $1 ORDER BY created_at DESC

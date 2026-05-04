@@ -10,6 +10,7 @@ import (
 type Blob struct {
 	ID               uuid.UUID
 	UserID           uuid.UUID
+	FolderID         *uuid.UUID
 	FileName         string
 	ContentType      string
 	ObjectKey        string

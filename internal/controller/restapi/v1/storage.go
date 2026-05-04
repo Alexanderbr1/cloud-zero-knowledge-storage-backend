@@ -41,9 +41,18 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid file_iv")
 			return
 		}
+		var folderID *uuid.UUID
+		if in.FolderID != nil {
+			parsed, err := uuid.Parse(*in.FolderID)
+			if err != nil {
+				restapi.WriteError(w, http.StatusBadRequest, "invalid folder_id")
+				return
+			}
+			folderID = &parsed
+		}
 		out, err := d.Storage.PresignPut(r.Context(), storageuc.PresignPutParams{
 			UserID: uid, FileName: in.FileName, ContentType: in.ContentType,
-			EncryptedFileKey: encryptedFileKey, FileIV: fileIV,
+			EncryptedFileKey: encryptedFileKey, FileIV: fileIV, FolderID: folderID,
 		})
 		if err != nil {
 			writeStorageErr(w, err)
@@ -112,11 +121,30 @@ func storageListBlobs(d Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		blobs, err := d.Storage.ListBlobs(r.Context(), uid)
+
+		var (
+			blobs []entity.Blob
+			err   error
+		)
+		folderRaw := r.URL.Query().Get("folder_id")
+		switch folderRaw {
+		case "":
+			blobs, err = d.Storage.ListBlobs(r.Context(), uid)
+		case "root":
+			blobs, err = d.Storage.ListBlobsInFolder(r.Context(), uid, nil)
+		default:
+			folderID, parseErr := uuid.Parse(folderRaw)
+			if parseErr != nil {
+				restapi.WriteError(w, http.StatusBadRequest, "invalid folder_id")
+				return
+			}
+			blobs, err = d.Storage.ListBlobsInFolder(r.Context(), uid, &folderID)
+		}
 		if err != nil {
 			writeStorageErr(w, err)
 			return
 		}
+
 		items := make([]dto.StorageBlobItem, 0, len(blobs))
 		for _, b := range blobs {
 			items = append(items, blobToDTO(b))
@@ -126,7 +154,7 @@ func storageListBlobs(d Deps) http.HandlerFunc {
 }
 
 func blobToDTO(b entity.Blob) dto.StorageBlobItem {
-	return dto.StorageBlobItem{
+	item := dto.StorageBlobItem{
 		BlobID:           b.ID.String(),
 		FileName:         b.FileName,
 		ContentType:      b.ContentType,
@@ -134,12 +162,20 @@ func blobToDTO(b entity.Blob) dto.StorageBlobItem {
 		EncryptedFileKey: base64.StdEncoding.EncodeToString(b.EncryptedFileKey),
 		FileIV:           base64.StdEncoding.EncodeToString(b.FileIV),
 	}
+	if b.FolderID != nil {
+		s := b.FolderID.String()
+		item.FolderID = &s
+	}
+	return item
 }
 
 func writeStorageErr(w http.ResponseWriter, err error) {
-	if errors.Is(err, storageuc.ErrNotFound) {
+	switch {
+	case errors.Is(err, storageuc.ErrNotFound):
 		restapi.WriteError(w, http.StatusNotFound, "not found")
-	} else {
+	case errors.Is(err, storageuc.ErrFolderNotFound):
+		restapi.WriteError(w, http.StatusNotFound, "folder not found")
+	default:
 		restapi.WriteError(w, http.StatusInternalServerError, "internal error")
 	}
 }

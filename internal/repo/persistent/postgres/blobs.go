@@ -15,9 +15,9 @@ var _ storageuc.BlobRegistry = (*Storage)(nil)
 
 func (s *Storage) RegisterBlob(ctx context.Context, p storageuc.RegisterBlobParams) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO stored_blobs (id, user_id, file_name, content_type, object_key, encrypted_file_key, file_iv)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		p.ID, p.UserID, p.FileName, p.ContentType, p.ObjectKey, p.EncryptedFileKey, p.FileIV,
+		`INSERT INTO stored_blobs (id, user_id, file_name, content_type, object_key, encrypted_file_key, file_iv, folder_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		p.ID, p.UserID, p.FileName, p.ContentType, p.ObjectKey, p.EncryptedFileKey, p.FileIV, p.FolderID,
 	)
 	return err
 }
@@ -55,7 +55,7 @@ func (s *Storage) RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (obj
 
 func (s *Storage) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, file_name, content_type, object_key, created_at, encrypted_file_key, file_iv
+		`SELECT id, folder_id, file_name, content_type, object_key, created_at, encrypted_file_key, file_iv
 		 FROM stored_blobs
 		 WHERE user_id = $1
 		 ORDER BY created_at DESC`,
@@ -69,10 +69,60 @@ func (s *Storage) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blo
 	var out []entity.Blob
 	for rows.Next() {
 		b := entity.Blob{UserID: userID}
-		if err := rows.Scan(&b.ID, &b.FileName, &b.ContentType, &b.ObjectKey, &b.CreatedAt, &b.EncryptedFileKey, &b.FileIV); err != nil {
+		if err := rows.Scan(&b.ID, &b.FolderID, &b.FileName, &b.ContentType, &b.ObjectKey, &b.CreatedAt, &b.EncryptedFileKey, &b.FileIV); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
 	}
 	return out, rows.Err()
+}
+
+func (s *Storage) ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folderID *uuid.UUID) ([]entity.Blob, error) {
+	var (
+		rows pgx.Rows
+		err  error
+	)
+	if folderID == nil {
+		rows, err = s.pool.Query(ctx,
+			`SELECT id, folder_id, file_name, content_type, object_key, created_at, encrypted_file_key, file_iv
+			 FROM stored_blobs
+			 WHERE user_id = $1 AND folder_id IS NULL
+			 ORDER BY created_at DESC`,
+			userID,
+		)
+	} else {
+		rows, err = s.pool.Query(ctx,
+			`SELECT id, folder_id, file_name, content_type, object_key, created_at, encrypted_file_key, file_iv
+			 FROM stored_blobs
+			 WHERE user_id = $1 AND folder_id = $2
+			 ORDER BY created_at DESC`,
+			userID, folderID,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []entity.Blob
+	for rows.Next() {
+		b := entity.Blob{UserID: userID}
+		if err := rows.Scan(&b.ID, &b.FolderID, &b.FileName, &b.ContentType, &b.ObjectKey, &b.CreatedAt, &b.EncryptedFileKey, &b.FileIV); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// MoveBlob updates the folder_id of a blob. Returns false if the blob was not found.
+func (s *Storage) MoveBlob(ctx context.Context, blobID, userID uuid.UUID, folderID *uuid.UUID) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE stored_blobs SET folder_id = $3 WHERE id = $1 AND user_id = $2`,
+		blobID, userID, folderID,
+	)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
