@@ -52,7 +52,8 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 		}
 		out, err := d.Storage.PresignPut(r.Context(), storageuc.PresignPutParams{
 			UserID: uid, FileName: in.FileName, ContentType: in.ContentType,
-			EncryptedFileKey: encryptedFileKey, FileIV: fileIV, FolderID: folderID,
+			FileSize: in.FileSize, EncryptedFileKey: encryptedFileKey,
+			FileIV: fileIV, FolderID: folderID,
 		})
 		if err != nil {
 			writeStorageErr(w, err)
@@ -158,9 +159,92 @@ func blobToDTO(b entity.Blob) dto.StorageBlobItem {
 		BlobID:           b.ID.String(),
 		FileName:         b.FileName,
 		ContentType:      b.ContentType,
+		FileSize:         b.FileSize,
 		CreatedAt:        b.CreatedAt,
 		EncryptedFileKey: base64.StdEncoding.EncodeToString(b.EncryptedFileKey),
 		FileIV:           base64.StdEncoding.EncodeToString(b.FileIV),
+	}
+	if b.FolderID != nil {
+		s := b.FolderID.String()
+		item.FolderID = &s
+	}
+	return item
+}
+
+func renameBlob(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, ok := restapi.MustUserID(w, r)
+		if !ok {
+			return
+		}
+		blobID, err := uuid.Parse(chi.URLParam(r, "blobID"))
+		if err != nil {
+			restapi.WriteError(w, http.StatusBadRequest, "invalid blob_id")
+			return
+		}
+		var in dto.RenameBlobRequest
+		if err := restapi.DecodeJSON(r, &in); err != nil {
+			restapi.WriteError(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		if err := restapi.ValidateStruct(&in); err != nil {
+			restapi.WriteValidationError(w, err)
+			return
+		}
+		name := strings.TrimSpace(in.Name)
+		if name == "" {
+			restapi.WriteError(w, http.StatusBadRequest, "name must not be blank")
+			return
+		}
+		if err := d.Storage.RenameBlob(r.Context(), uid, blobID, name); err != nil {
+			writeStorageErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func storageSearch(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, ok := restapi.MustUserID(w, r)
+		if !ok {
+			return
+		}
+		q := strings.TrimSpace(r.URL.Query().Get("q"))
+		if q == "" {
+			restapi.WriteError(w, http.StatusBadRequest, "q is required")
+			return
+		}
+		result, err := d.Storage.Search(r.Context(), storageuc.SearchParams{UserID: uid, Query: q})
+		if err != nil {
+			restapi.WriteError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		blobs := make([]dto.SearchBlobItem, 0, len(result.Blobs))
+		for _, b := range result.Blobs {
+			blobs = append(blobs, searchBlobToDTO(b))
+		}
+
+		folders := make([]dto.FolderItem, 0, len(result.Folders))
+		for _, f := range result.Folders {
+			folders = append(folders, folderToDTO(f))
+		}
+
+		restapi.WriteJSON(w, http.StatusOK, dto.SearchResponse{Blobs: blobs, Folders: folders})
+	}
+}
+
+func searchBlobToDTO(b storageuc.SearchBlobRecord) dto.SearchBlobItem {
+	item := dto.SearchBlobItem{
+		BlobID:           b.ID.String(),
+		FileName:         b.FileName,
+		ContentType:      b.ContentType,
+		FileSize:         b.FileSize,
+		CreatedAt:        b.CreatedAt,
+		EncryptedFileKey: base64.StdEncoding.EncodeToString(b.EncryptedFileKey),
+		FileIV:           base64.StdEncoding.EncodeToString(b.FileIV),
+		FolderName:       b.FolderName,
 	}
 	if b.FolderID != nil {
 		s := b.FolderID.String()

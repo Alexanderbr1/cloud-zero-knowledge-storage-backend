@@ -12,6 +12,38 @@ import (
 	storageuc "cloud-backend/internal/usecase/storage"
 )
 
+const listFoldersRootSQL = `
+	WITH RECURSIVE descendants(root_id, folder_id) AS (
+		SELECT id AS root_id, id AS folder_id FROM folders WHERE user_id = $1 AND parent_id IS NULL
+		UNION ALL
+		SELECT d.root_id, f.id FROM folders f JOIN descendants d ON f.parent_id = d.folder_id
+	),
+	folder_sizes AS (
+		SELECT d.root_id, COALESCE(SUM(b.file_size), 0) AS total_size
+		FROM descendants d LEFT JOIN stored_blobs b ON b.folder_id = d.folder_id
+		GROUP BY d.root_id
+	)
+	SELECT f.id, f.user_id, f.parent_id, f.name, f.created_at, COALESCE(fs.total_size, 0)
+	FROM folders f LEFT JOIN folder_sizes fs ON fs.root_id = f.id
+	WHERE f.user_id = $1 AND f.parent_id IS NULL
+	ORDER BY f.name`
+
+const listFoldersChildSQL = `
+	WITH RECURSIVE descendants(root_id, folder_id) AS (
+		SELECT id AS root_id, id AS folder_id FROM folders WHERE user_id = $1 AND parent_id = $2
+		UNION ALL
+		SELECT d.root_id, f.id FROM folders f JOIN descendants d ON f.parent_id = d.folder_id
+	),
+	folder_sizes AS (
+		SELECT d.root_id, COALESCE(SUM(b.file_size), 0) AS total_size
+		FROM descendants d LEFT JOIN stored_blobs b ON b.folder_id = d.folder_id
+		GROUP BY d.root_id
+	)
+	SELECT f.id, f.user_id, f.parent_id, f.name, f.created_at, COALESCE(fs.total_size, 0)
+	FROM folders f LEFT JOIN folder_sizes fs ON fs.root_id = f.id
+	WHERE f.user_id = $1 AND f.parent_id = $2
+	ORDER BY f.name`
+
 var _ storageuc.FolderRegistry = (*Storage)(nil)
 
 func (s *Storage) CreateFolder(ctx context.Context, p storageuc.CreateFolderParams) (entity.Folder, error) {
@@ -54,36 +86,15 @@ func (s *Storage) ListFolders(ctx context.Context, userID uuid.UUID, parentID *u
 		err  error
 	)
 	if parentID == nil {
-		rows, err = s.pool.Query(ctx,
-			`SELECT id, user_id, parent_id, name, created_at
-			 FROM folders
-			 WHERE user_id = $1 AND parent_id IS NULL
-			 ORDER BY name`,
-			userID,
-		)
+		rows, err = s.pool.Query(ctx, listFoldersRootSQL, userID)
 	} else {
-		rows, err = s.pool.Query(ctx,
-			`SELECT id, user_id, parent_id, name, created_at
-			 FROM folders
-			 WHERE user_id = $1 AND parent_id = $2
-			 ORDER BY name`,
-			userID, parentID,
-		)
+		rows, err = s.pool.Query(ctx, listFoldersChildSQL, userID, parentID)
 	}
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var out []entity.Folder
-	for rows.Next() {
-		var f entity.Folder
-		if err := rows.Scan(&f.ID, &f.UserID, &f.ParentID, &f.Name, &f.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, f)
-	}
-	return out, rows.Err()
+	return scanFolders(rows)
 }
 
 func (s *Storage) RenameFolder(ctx context.Context, folderID, userID uuid.UUID, name string) (entity.Folder, error) {
@@ -173,6 +184,44 @@ func (s *Storage) DeleteFolder(ctx context.Context, folderID, userID uuid.UUID) 
 	}
 
 	return tx.Commit(ctx)
+}
+
+func (s *Storage) SearchFolders(ctx context.Context, userID uuid.UUID, query string) ([]entity.Folder, error) {
+	rows, err := s.pool.Query(ctx, `
+		WITH RECURSIVE descendants(root_id, folder_id) AS (
+			SELECT id AS root_id, id AS folder_id FROM folders WHERE user_id = $1 AND name ILIKE $2
+			UNION ALL
+			SELECT d.root_id, f.id FROM folders f JOIN descendants d ON f.parent_id = d.folder_id
+		),
+		folder_sizes AS (
+			SELECT d.root_id, COALESCE(SUM(b.file_size), 0) AS total_size
+			FROM descendants d LEFT JOIN stored_blobs b ON b.folder_id = d.folder_id
+			GROUP BY d.root_id
+		)
+		SELECT f.id, f.user_id, f.parent_id, f.name, f.created_at, COALESCE(fs.total_size, 0)
+		FROM folders f LEFT JOIN folder_sizes fs ON fs.root_id = f.id
+		WHERE f.user_id = $1 AND f.name ILIKE $2
+		ORDER BY f.name
+		LIMIT 50`,
+		userID, "%"+query+"%",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFolders(rows)
+}
+
+func scanFolders(rows pgx.Rows) ([]entity.Folder, error) {
+	var out []entity.Folder
+	for rows.Next() {
+		var f entity.Folder
+		if err := rows.Scan(&f.ID, &f.UserID, &f.ParentID, &f.Name, &f.CreatedAt, &f.TotalSize); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
 }
 
 // IsDescendantOf checks whether candidateID is in the subtree rooted at ancestorID.

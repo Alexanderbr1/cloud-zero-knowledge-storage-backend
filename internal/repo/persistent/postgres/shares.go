@@ -134,20 +134,7 @@ func (s *Storage) ListSharedWithUser(ctx context.Context, recipientID uuid.UUID)
 		return nil, err
 	}
 	defer rows.Close()
-
-	var out []entity.FileShareView
-	for rows.Next() {
-		var fs entity.FileShareView
-		if err := rows.Scan(
-			&fs.ID, &fs.BlobID, &fs.OwnerID, &fs.RecipientID,
-			&fs.EphemeralPub, &fs.WrappedFileKey, &fs.ExpiresAt, &fs.RevokedAt, &fs.CreatedAt,
-			&fs.BlobFileName, &fs.BlobContentType, &fs.OwnerEmail, &fs.RecipientEmail,
-		); err != nil {
-			return nil, err
-		}
-		out = append(out, fs)
-	}
-	return out, rows.Err()
+	return scanFileShareViews(rows)
 }
 
 func (s *Storage) ListSharesForBlob(ctx context.Context, blobID, ownerID uuid.UUID) ([]entity.FileShareView, error) {
@@ -168,7 +155,10 @@ func (s *Storage) ListSharesForBlob(ctx context.Context, blobID, ownerID uuid.UU
 		return nil, err
 	}
 	defer rows.Close()
+	return scanFileShareViews(rows)
+}
 
+func scanFileShareViews(rows pgx.Rows) ([]entity.FileShareView, error) {
 	var out []entity.FileShareView
 	for rows.Next() {
 		var fs entity.FileShareView

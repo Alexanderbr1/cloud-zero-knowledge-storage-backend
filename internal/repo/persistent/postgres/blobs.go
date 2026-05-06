@@ -15,9 +15,9 @@ var _ storageuc.BlobRegistry = (*Storage)(nil)
 
 func (s *Storage) RegisterBlob(ctx context.Context, p storageuc.RegisterBlobParams) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO stored_blobs (id, user_id, file_name, content_type, object_key, encrypted_file_key, file_iv, folder_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		p.ID, p.UserID, p.FileName, p.ContentType, p.ObjectKey, p.EncryptedFileKey, p.FileIV, p.FolderID,
+		`INSERT INTO stored_blobs (id, user_id, file_name, content_type, object_key, file_size, encrypted_file_key, file_iv, folder_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		p.ID, p.UserID, p.FileName, p.ContentType, p.ObjectKey, p.FileSize, p.EncryptedFileKey, p.FileIV, p.FolderID,
 	)
 	return err
 }
@@ -55,7 +55,7 @@ func (s *Storage) RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (obj
 
 func (s *Storage) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, folder_id, file_name, content_type, object_key, created_at, encrypted_file_key, file_iv
+		`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, file_iv
 		 FROM stored_blobs
 		 WHERE user_id = $1
 		 ORDER BY created_at DESC`,
@@ -65,16 +65,7 @@ func (s *Storage) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blo
 		return nil, err
 	}
 	defer rows.Close()
-
-	var out []entity.Blob
-	for rows.Next() {
-		b := entity.Blob{UserID: userID}
-		if err := rows.Scan(&b.ID, &b.FolderID, &b.FileName, &b.ContentType, &b.ObjectKey, &b.CreatedAt, &b.EncryptedFileKey, &b.FileIV); err != nil {
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	return out, rows.Err()
+	return scanBlobs(rows, userID)
 }
 
 func (s *Storage) ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folderID *uuid.UUID) ([]entity.Blob, error) {
@@ -84,7 +75,7 @@ func (s *Storage) ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folde
 	)
 	if folderID == nil {
 		rows, err = s.pool.Query(ctx,
-			`SELECT id, folder_id, file_name, content_type, object_key, created_at, encrypted_file_key, file_iv
+			`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, file_iv
 			 FROM stored_blobs
 			 WHERE user_id = $1 AND folder_id IS NULL
 			 ORDER BY created_at DESC`,
@@ -92,7 +83,7 @@ func (s *Storage) ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folde
 		)
 	} else {
 		rows, err = s.pool.Query(ctx,
-			`SELECT id, folder_id, file_name, content_type, object_key, created_at, encrypted_file_key, file_iv
+			`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, file_iv
 			 FROM stored_blobs
 			 WHERE user_id = $1 AND folder_id = $2
 			 ORDER BY created_at DESC`,
@@ -103,11 +94,14 @@ func (s *Storage) ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folde
 		return nil, err
 	}
 	defer rows.Close()
+	return scanBlobs(rows, userID)
+}
 
+func scanBlobs(rows pgx.Rows, userID uuid.UUID) ([]entity.Blob, error) {
 	var out []entity.Blob
 	for rows.Next() {
 		b := entity.Blob{UserID: userID}
-		if err := rows.Scan(&b.ID, &b.FolderID, &b.FileName, &b.ContentType, &b.ObjectKey, &b.CreatedAt, &b.EncryptedFileKey, &b.FileIV); err != nil {
+		if err := rows.Scan(&b.ID, &b.FolderID, &b.FileName, &b.ContentType, &b.ObjectKey, &b.FileSize, &b.CreatedAt, &b.EncryptedFileKey, &b.FileIV); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
@@ -125,4 +119,50 @@ func (s *Storage) MoveBlob(ctx context.Context, blobID, userID uuid.UUID, folder
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// RenameBlob updates the file_name of a blob. Returns false if the blob was not found.
+func (s *Storage) RenameBlob(ctx context.Context, blobID, userID uuid.UUID, name string) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE stored_blobs SET file_name = $3 WHERE id = $1 AND user_id = $2`,
+		blobID, userID, name,
+	)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (s *Storage) SearchBlobs(ctx context.Context, userID uuid.UUID, query string) ([]storageuc.SearchBlobRecord, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT b.id, b.folder_id, b.file_name, b.content_type, b.object_key, b.file_size,
+		        b.created_at, b.encrypted_file_key, b.file_iv, f.name AS folder_name
+		 FROM stored_blobs b
+		 LEFT JOIN folders f ON f.id = b.folder_id
+		 WHERE b.user_id = $1 AND b.file_name ILIKE $2
+		 ORDER BY b.created_at DESC
+		 LIMIT 200`,
+		userID, "%"+query+"%",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanSearchBlobs(rows, userID)
+}
+
+func scanSearchBlobs(rows pgx.Rows, userID uuid.UUID) ([]storageuc.SearchBlobRecord, error) {
+	var out []storageuc.SearchBlobRecord
+	for rows.Next() {
+		var rec storageuc.SearchBlobRecord
+		rec.UserID = userID
+		if err := rows.Scan(
+			&rec.ID, &rec.FolderID, &rec.FileName, &rec.ContentType, &rec.ObjectKey,
+			&rec.FileSize, &rec.CreatedAt, &rec.EncryptedFileKey, &rec.FileIV, &rec.FolderName,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
 }

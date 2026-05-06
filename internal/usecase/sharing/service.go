@@ -103,7 +103,6 @@ func (s *Service) CreateShare(ctx context.Context, p CreateShareParams) (entity.
 	tctx, cancel := dbCtx(ctx)
 	defer cancel()
 
-	// Verify blob exists and belongs to the owner.
 	info, ok, err := s.Blobs.GetBlobInfo(tctx, p.BlobID)
 	if err != nil {
 		return entity.FileShareView{}, fmt.Errorf("get blob: %w", err)
@@ -112,11 +111,7 @@ func (s *Service) CreateShare(ctx context.Context, p CreateShareParams) (entity.
 		return entity.FileShareView{}, ErrNotFound
 	}
 
-	tctx2, cancel2 := dbCtx(ctx)
-	defer cancel2()
-
-	// Verify recipient exists and has a public key, and get their ID in one query.
-	_, recipientID, err := s.Users.GetPublicKeyByEmail(tctx2, p.RecipientEmail)
+	_, recipientID, err := s.Users.GetPublicKeyByEmail(tctx, p.RecipientEmail)
 	if err != nil {
 		return entity.FileShareView{}, err
 	}
@@ -124,13 +119,10 @@ func (s *Service) CreateShare(ctx context.Context, p CreateShareParams) (entity.
 		return entity.FileShareView{}, ErrSelfShare
 	}
 
-	tctx3, cancel3 := dbCtx(ctx)
-	defer cancel3()
-
-	return s.Shares.CreateShare(tctx3, CreateShareParams{
+	return s.Shares.CreateShare(tctx, CreateShareParams{
 		BlobID:         p.BlobID,
 		OwnerID:        p.OwnerID,
-		RecipientID:    recipientID, // already resolved — repo does no extra lookup
+		RecipientID:    recipientID,
 		EphemeralPub:   p.EphemeralPub,
 		WrappedFileKey: p.WrappedFileKey,
 		ExpiresAt:      p.ExpiresAt,
@@ -154,10 +146,7 @@ func (s *Service) GetSharedFile(ctx context.Context, shareID, callerID uuid.UUID
 		return SharedFileResult{}, err
 	}
 
-	tctx2, cancel2 := dbCtx(ctx)
-	defer cancel2()
-
-	info, ok, err := s.Blobs.GetBlobInfo(tctx2, share.BlobID)
+	info, ok, err := s.Blobs.GetBlobInfo(tctx, share.BlobID)
 	if err != nil {
 		return SharedFileResult{}, fmt.Errorf("get blob: %w", err)
 	}

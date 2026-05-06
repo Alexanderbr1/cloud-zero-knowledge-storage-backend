@@ -38,12 +38,14 @@ type StorageService interface {
 	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
 	ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folderID *uuid.UUID) ([]entity.Blob, error)
 	MoveBlob(ctx context.Context, userID, blobID uuid.UUID, folderID *uuid.UUID) error
+	RenameBlob(ctx context.Context, userID, blobID uuid.UUID, name string) error
 	CreateFolder(ctx context.Context, p storageuc.CreateFolderParams) (entity.Folder, error)
 	GetFolder(ctx context.Context, userID, folderID uuid.UUID) (entity.Folder, error)
 	ListFolders(ctx context.Context, userID uuid.UUID, parentID *uuid.UUID) ([]entity.Folder, error)
 	RenameFolder(ctx context.Context, userID, folderID uuid.UUID, name string) (entity.Folder, error)
 	MoveFolder(ctx context.Context, p storageuc.MoveFolderParams) error
 	DeleteFolder(ctx context.Context, userID, folderID uuid.UUID) error
+	Search(ctx context.Context, p storageuc.SearchParams) (storageuc.SearchResult, error)
 }
 
 // SharingService — бизнес-логика шаринга файлов.
@@ -95,9 +97,12 @@ func NewRouter(d Deps) chi.Router {
 			r.Get("/blobs", storageListBlobs(d))
 			r.Post("/blobs/{blobID}/presign-get", storagePresignGet(d))
 			r.Delete("/blobs/{blobID}", storageDeleteBlob(d))
+			r.Patch("/blobs/{blobID}", renameBlob(d))
 			r.Patch("/blobs/{blobID}/folder", moveBlob(d))
 			r.Get("/blobs/{blobID}/shares", listMyShares(d))
 			r.Post("/blobs/{blobID}/shares", createShare(d))
+
+			r.Get("/search", storageSearch(d))
 
 			r.Post("/folders", createFolder(d))
 			r.Get("/folders", listFolders(d))

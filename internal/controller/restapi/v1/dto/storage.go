@@ -10,6 +10,7 @@ type StoragePresignPutRequest struct {
 	EncryptedFileKey string  `json:"encrypted_file_key" validate:"required"`
 	FileIV           string  `json:"file_iv"            validate:"required"`
 	FolderID         *string `json:"folder_id"`
+	FileSize         int64   `json:"file_size"`
 }
 
 type StoragePresignPutResponse struct {
@@ -35,6 +36,7 @@ type StorageBlobItem struct {
 	FolderID         *string   `json:"folder_id"` // null = root level
 	FileName         string    `json:"file_name"`
 	ContentType      string    `json:"content_type"`
+	FileSize         int64     `json:"file_size"`
 	CreatedAt        time.Time `json:"created_at"`
 	EncryptedFileKey string    `json:"encrypted_file_key"`
 	FileIV           string    `json:"file_iv"`
@@ -48,13 +50,35 @@ type MoveBlobRequest struct {
 	FolderID *string `json:"folder_id"` // null/absent = move to root
 }
 
+type RenameBlobRequest struct {
+	Name string `json:"name" validate:"required,min=1,max=512"`
+}
+
 // ─── Folders ──────────────────────────────────────────────────────────────────
 
 type FolderItem struct {
 	FolderID  string    `json:"folder_id"`
 	ParentID  *string   `json:"parent_id"` // null = root level
 	Name      string    `json:"name"`
+	TotalSize int64     `json:"total_size"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type SearchBlobItem struct {
+	BlobID           string    `json:"blob_id"`
+	FolderID         *string   `json:"folder_id"`
+	FolderName       *string   `json:"folder_name"`
+	FileName         string    `json:"file_name"`
+	ContentType      string    `json:"content_type"`
+	FileSize         int64     `json:"file_size"`
+	CreatedAt        time.Time `json:"created_at"`
+	EncryptedFileKey string    `json:"encrypted_file_key"`
+	FileIV           string    `json:"file_iv"`
+}
+
+type SearchResponse struct {
+	Blobs   []SearchBlobItem `json:"blobs"`
+	Folders []FolderItem     `json:"folders"`
 }
 
 type ListFoldersResponse struct {

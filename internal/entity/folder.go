@@ -11,5 +11,6 @@ type Folder struct {
 	UserID    uuid.UUID
 	ParentID  *uuid.UUID
 	Name      string
+	TotalSize int64
 	CreatedAt time.Time
 }

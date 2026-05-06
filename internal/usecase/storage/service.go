@@ -13,6 +13,8 @@ import (
 	"cloud-backend/internal/entity"
 )
 
+const dbTimeout = 10 * time.Second
+
 type Service struct {
 	Objects ObjectStore
 	Blobs   BlobRegistry
@@ -39,6 +41,14 @@ type BlobRegistry interface {
 	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
 	ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folderID *uuid.UUID) ([]entity.Blob, error)
 	MoveBlob(ctx context.Context, blobID, userID uuid.UUID, folderID *uuid.UUID) (bool, error)
+	RenameBlob(ctx context.Context, blobID, userID uuid.UUID, name string) (bool, error)
+	SearchBlobs(ctx context.Context, userID uuid.UUID, query string) ([]SearchBlobRecord, error)
+}
+
+// SearchBlobRecord extends Blob with the folder name for display in search results.
+type SearchBlobRecord struct {
+	entity.Blob
+	FolderName *string
 }
 
 type RegisterBlobParams struct {
@@ -47,6 +57,7 @@ type RegisterBlobParams struct {
 	FileName         string
 	ContentType      string
 	ObjectKey        string
+	FileSize         int64
 	EncryptedFileKey []byte
 	FileIV           []byte
 	FolderID         *uuid.UUID
@@ -71,6 +82,7 @@ type FolderRegistry interface {
 	// Returns ErrFolderNotEmpty if it has children, ErrFolderNotFound if absent/not owned.
 	DeleteFolder(ctx context.Context, folderID, userID uuid.UUID) error
 	IsDescendantOf(ctx context.Context, ancestorID, candidateID uuid.UUID) (bool, error)
+	SearchFolders(ctx context.Context, userID uuid.UUID, query string) ([]entity.Folder, error)
 }
 
 type CreateFolderParams struct {
@@ -91,6 +103,7 @@ type PresignPutParams struct {
 	UserID           uuid.UUID
 	FileName         string
 	ContentType      string
+	FileSize         int64
 	EncryptedFileKey []byte
 	FileIV           []byte
 	FolderID         *uuid.UUID
@@ -125,23 +138,19 @@ func (s *Service) PresignPut(ctx context.Context, p PresignPutParams) (*PresignP
 	cleanName := sanitizeFileName(p.FileName)
 	objectKey := fmt.Sprintf("blobs/%s/%s", p.UserID, blobID)
 
-	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
 	if p.FolderID != nil {
-		_, ok, err := s.Folders.GetFolder(dbCtx, *p.FolderID, p.UserID)
-		if err != nil {
-			return nil, fmt.Errorf("get folder: %w", err)
-		}
-		if !ok {
-			return nil, ErrFolderNotFound
+		if err := s.requireFolder(dbCtx, *p.FolderID, p.UserID); err != nil {
+			return nil, err
 		}
 	}
 
 	if err := s.Blobs.RegisterBlob(dbCtx, RegisterBlobParams{
 		ID: blobID, UserID: p.UserID, FileName: cleanName, ContentType: p.ContentType,
-		ObjectKey: objectKey, EncryptedFileKey: p.EncryptedFileKey, FileIV: p.FileIV,
-		FolderID: p.FolderID,
+		ObjectKey: objectKey, FileSize: p.FileSize, EncryptedFileKey: p.EncryptedFileKey,
+		FileIV: p.FileIV, FolderID: p.FolderID,
 	}); err != nil {
 		return nil, fmt.Errorf("register blob: %w", err)
 	}
@@ -162,7 +171,7 @@ func (s *Service) PresignPut(ctx context.Context, p PresignPutParams) (*PresignP
 }
 
 func (s *Service) PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*PresignGetResult, error) {
-	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
 	meta, ok, err := s.Blobs.GetBlobMeta(dbCtx, blobID, userID)
@@ -194,7 +203,7 @@ func (s *Service) PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*Pr
 // Если запись отсутствует — возвращает ErrNotFound без обращения к MinIO.
 // Если объект в MinIO уже отсутствует — операция идемпотентна.
 func (s *Service) DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error {
-	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
 	objectKey, ok, err := s.Blobs.RemoveBlob(dbCtx, blobID, userID)
@@ -212,7 +221,7 @@ func (s *Service) DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) erro
 }
 
 func (s *Service) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error) {
-	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
 	blobs, err := s.Blobs.ListBlobs(dbCtx, userID)
@@ -223,16 +232,12 @@ func (s *Service) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blo
 }
 
 func (s *Service) ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folderID *uuid.UUID) ([]entity.Blob, error) {
-	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
 	if folderID != nil {
-		_, ok, err := s.Folders.GetFolder(dbCtx, *folderID, userID)
-		if err != nil {
-			return nil, fmt.Errorf("get folder: %w", err)
-		}
-		if !ok {
-			return nil, ErrFolderNotFound
+		if err := s.requireFolder(dbCtx, *folderID, userID); err != nil {
+			return nil, err
 		}
 	}
 
@@ -244,16 +249,12 @@ func (s *Service) ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folde
 }
 
 func (s *Service) MoveBlob(ctx context.Context, userID, blobID uuid.UUID, folderID *uuid.UUID) error {
-	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
 	if folderID != nil {
-		_, ok, err := s.Folders.GetFolder(dbCtx, *folderID, userID)
-		if err != nil {
-			return fmt.Errorf("get folder: %w", err)
-		}
-		if !ok {
-			return ErrFolderNotFound
+		if err := s.requireFolder(dbCtx, *folderID, userID); err != nil {
+			return err
 		}
 	}
 
@@ -267,19 +268,30 @@ func (s *Service) MoveBlob(ctx context.Context, userID, blobID uuid.UUID, folder
 	return nil
 }
 
+func (s *Service) RenameBlob(ctx context.Context, userID, blobID uuid.UUID, name string) error {
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
+	defer dbCancel()
+
+	name = sanitizeFileName(name)
+	ok, err := s.Blobs.RenameBlob(dbCtx, blobID, userID, name)
+	if err != nil {
+		return fmt.Errorf("rename blob: %w", err)
+	}
+	if !ok {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ─── Folder methods ───────────────────────────────────────────────────────────
 
 func (s *Service) CreateFolder(ctx context.Context, p CreateFolderParams) (entity.Folder, error) {
-	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
 	if p.ParentID != nil {
-		_, ok, err := s.Folders.GetFolder(dbCtx, *p.ParentID, p.UserID)
-		if err != nil {
-			return entity.Folder{}, fmt.Errorf("get parent folder: %w", err)
-		}
-		if !ok {
-			return entity.Folder{}, ErrFolderNotFound
+		if err := s.requireFolder(dbCtx, *p.ParentID, p.UserID); err != nil {
+			return entity.Folder{}, err
 		}
 	}
 
@@ -291,7 +303,7 @@ func (s *Service) CreateFolder(ctx context.Context, p CreateFolderParams) (entit
 }
 
 func (s *Service) GetFolder(ctx context.Context, userID, folderID uuid.UUID) (entity.Folder, error) {
-	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
 	f, ok, err := s.Folders.GetFolder(dbCtx, folderID, userID)
@@ -305,16 +317,12 @@ func (s *Service) GetFolder(ctx context.Context, userID, folderID uuid.UUID) (en
 }
 
 func (s *Service) ListFolders(ctx context.Context, userID uuid.UUID, parentID *uuid.UUID) ([]entity.Folder, error) {
-	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
 	if parentID != nil {
-		_, ok, err := s.Folders.GetFolder(dbCtx, *parentID, userID)
-		if err != nil {
-			return nil, fmt.Errorf("get parent folder: %w", err)
-		}
-		if !ok {
-			return nil, ErrFolderNotFound
+		if err := s.requireFolder(dbCtx, *parentID, userID); err != nil {
+			return nil, err
 		}
 	}
 
@@ -326,7 +334,7 @@ func (s *Service) ListFolders(ctx context.Context, userID uuid.UUID, parentID *u
 }
 
 func (s *Service) RenameFolder(ctx context.Context, userID, folderID uuid.UUID, name string) (entity.Folder, error) {
-	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
 	f, err := s.Folders.RenameFolder(dbCtx, folderID, userID, name)
@@ -337,7 +345,7 @@ func (s *Service) RenameFolder(ctx context.Context, userID, folderID uuid.UUID, 
 }
 
 func (s *Service) MoveFolder(ctx context.Context, p MoveFolderParams) error {
-	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
 	if _, ok, err := s.Folders.GetFolder(dbCtx, p.FolderID, p.UserID); err != nil {
@@ -374,11 +382,73 @@ func (s *Service) MoveFolder(ctx context.Context, p MoveFolderParams) error {
 }
 
 func (s *Service) DeleteFolder(ctx context.Context, userID, folderID uuid.UUID) error {
-	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
 	if err := s.Folders.DeleteFolder(dbCtx, folderID, userID); err != nil {
 		return fmt.Errorf("delete folder: %w", err)
+	}
+	return nil
+}
+
+// ─── Search ───────────────────────────────────────────────────────────────────
+
+type SearchParams struct {
+	UserID uuid.UUID
+	Query  string
+}
+
+type SearchResult struct {
+	Blobs   []SearchBlobRecord
+	Folders []entity.Folder
+}
+
+func (s *Service) Search(ctx context.Context, p SearchParams) (SearchResult, error) {
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
+	defer dbCancel()
+
+	type blobResult struct {
+		blobs []SearchBlobRecord
+		err   error
+	}
+	type folderResult struct {
+		folders []entity.Folder
+		err     error
+	}
+
+	blobCh := make(chan blobResult, 1)
+	folderCh := make(chan folderResult, 1)
+
+	go func() {
+		blobs, err := s.Blobs.SearchBlobs(dbCtx, p.UserID, p.Query)
+		blobCh <- blobResult{blobs, err}
+	}()
+	go func() {
+		folders, err := s.Folders.SearchFolders(dbCtx, p.UserID, p.Query)
+		folderCh <- folderResult{folders, err}
+	}()
+
+	br := <-blobCh
+	fr := <-folderCh
+
+	if br.err != nil {
+		return SearchResult{}, fmt.Errorf("search blobs: %w", br.err)
+	}
+	if fr.err != nil {
+		return SearchResult{}, fmt.Errorf("search folders: %w", fr.err)
+	}
+	return SearchResult{Blobs: br.blobs, Folders: fr.folders}, nil
+}
+
+// ─── Private helpers ──────────────────────────────────────────────────────────
+
+func (s *Service) requireFolder(ctx context.Context, folderID, userID uuid.UUID) error {
+	_, ok, err := s.Folders.GetFolder(ctx, folderID, userID)
+	if err != nil {
+		return fmt.Errorf("get folder: %w", err)
+	}
+	if !ok {
+		return ErrFolderNotFound
 	}
 	return nil
 }

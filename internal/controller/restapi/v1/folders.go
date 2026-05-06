@@ -231,6 +231,7 @@ func folderToDTO(f entity.Folder) dto.FolderItem {
 	item := dto.FolderItem{
 		FolderID:  f.ID.String(),
 		Name:      f.Name,
+		TotalSize: f.TotalSize,
 		CreatedAt: f.CreatedAt,
 	}
 	if f.ParentID != nil {
