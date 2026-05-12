@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -56,7 +57,7 @@ func (s *Storage) CreateFolder(ctx context.Context, p storageuc.CreateFolderPara
 	).Scan(&f.ID, &f.UserID, &f.ParentID, &f.Name, &f.CreatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
 			return entity.Folder{}, storageuc.ErrFolderConflict
 		}
 		return entity.Folder{}, err
@@ -110,7 +111,7 @@ func (s *Storage) RenameFolder(ctx context.Context, folderID, userID uuid.UUID, 
 	}
 	if err != nil {
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
 			return entity.Folder{}, storageuc.ErrFolderConflict
 		}
 		return entity.Folder{}, err
@@ -126,7 +127,7 @@ func (s *Storage) MoveFolder(ctx context.Context, p storageuc.MoveFolderParams) 
 	)
 	if err != nil {
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
 			return storageuc.ErrFolderConflict
 		}
 		return err

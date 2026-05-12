@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 
 	"cloud-backend/internal/entity"
 )
@@ -407,37 +408,31 @@ func (s *Service) Search(ctx context.Context, p SearchParams) (SearchResult, err
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	type blobResult struct {
-		blobs []SearchBlobRecord
-		err   error
-	}
-	type folderResult struct {
-		folders []entity.Folder
-		err     error
-	}
+	g, gctx := errgroup.WithContext(dbCtx)
+	var blobs []SearchBlobRecord
+	var folders []entity.Folder
 
-	blobCh := make(chan blobResult, 1)
-	folderCh := make(chan folderResult, 1)
+	g.Go(func() error {
+		var err error
+		blobs, err = s.Blobs.SearchBlobs(gctx, p.UserID, p.Query)
+		if err != nil {
+			return fmt.Errorf("search blobs: %w", err)
+		}
+		return nil
+	})
+	g.Go(func() error {
+		var err error
+		folders, err = s.Folders.SearchFolders(gctx, p.UserID, p.Query)
+		if err != nil {
+			return fmt.Errorf("search folders: %w", err)
+		}
+		return nil
+	})
 
-	go func() {
-		blobs, err := s.Blobs.SearchBlobs(dbCtx, p.UserID, p.Query)
-		blobCh <- blobResult{blobs, err}
-	}()
-	go func() {
-		folders, err := s.Folders.SearchFolders(dbCtx, p.UserID, p.Query)
-		folderCh <- folderResult{folders, err}
-	}()
-
-	br := <-blobCh
-	fr := <-folderCh
-
-	if br.err != nil {
-		return SearchResult{}, fmt.Errorf("search blobs: %w", br.err)
+	if err := g.Wait(); err != nil {
+		return SearchResult{}, err
 	}
-	if fr.err != nil {
-		return SearchResult{}, fmt.Errorf("search folders: %w", fr.err)
-	}
-	return SearchResult{Blobs: br.blobs, Folders: fr.folders}, nil
+	return SearchResult{Blobs: blobs, Folders: folders}, nil
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────

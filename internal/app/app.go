@@ -33,7 +33,8 @@ type sessionCleaner interface {
 }
 
 func Run(cfg config.Config, log zerolog.Logger) error {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	pool, err := postgres.NewPool(cfg.DatabaseURL)
 	if err != nil {
@@ -198,5 +199,9 @@ func connectRedis(ctx context.Context, redisURL string, log zerolog.Logger) (*go
 		return nil, func() {}, fmt.Errorf("redis ping: %w", err)
 	}
 	log.Info().Str("url", redisURL).Msg("redis connected")
-	return client, func() { client.Close() }, nil
+	return client, func() {
+		if err := client.Close(); err != nil {
+			log.Error().Err(err).Msg("redis close failed")
+		}
+	}, nil
 }

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -201,9 +202,9 @@ func (s *Service) LoginInit(ctx context.Context, email, aHex string) (LoginInitR
 		SRPSaltHex:          u.SRPSalt,
 		AHex:                aHex,
 		Session:             sess,
-		CryptoSalt:          append([]byte(nil), u.CryptoSalt...),
+		CryptoSalt:          slices.Clone(u.CryptoSalt),
 		BcryptSalt:          u.BcryptSalt,
-		EncryptedPrivateKey: append([]byte(nil), u.EncryptedPrivateKey...),
+		EncryptedPrivateKey: slices.Clone(u.EncryptedPrivateKey),
 		ExpiresAt:           time.Now().Add(SRPSessionTTL),
 	}) {
 		return LoginInitResult{}, fmt.Errorf("srp session store at capacity")
@@ -214,7 +215,7 @@ func (s *Service) LoginInit(ctx context.Context, email, aHex string) (LoginInitR
 		SRPSalt:    u.SRPSalt,
 		BcryptSalt: u.BcryptSalt,
 		B:          sess.PublicEphemeralHex(),
-		CryptoSalt: append([]byte(nil), u.CryptoSalt...),
+		CryptoSalt: slices.Clone(u.CryptoSalt),
 	}, nil
 }
 
@@ -272,7 +273,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 	}
 
 	if err := s.DeviceSessions.UpdateLastActive(ctx, consumed.DeviceSessionID); err != nil {
-		s.Logger.Warn().Err(err).Msg("update last_active_at failed")
+		s.Logger.Debug().Err(err).Msg("update last_active_at failed")
 	}
 
 	return s.issueTokenPairForDevice(ctx, consumed.UserID, consumed.DeviceSessionID)

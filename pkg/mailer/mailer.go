@@ -129,7 +129,7 @@ type resendRequest struct {
 	HTML    string   `json:"html"`
 }
 
-func (m *Mailer) sendViaResend(ctx context.Context, to, subject, plain, html string) error {
+func (m *Mailer) sendViaResend(ctx context.Context, to, subject, plain, html string) (retErr error) {
 	payload, err := json.Marshal(resendRequest{
 		From:    m.cfg.From,
 		To:      []string{to},
@@ -152,7 +152,11 @@ func (m *Mailer) sendViaResend(ctx context.Context, to, subject, plain, html str
 	if err != nil {
 		return fmt.Errorf("mailer: resend request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("mailer: close response body: %w", err)
+		}
+	}()
 
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
@@ -176,18 +180,26 @@ func (m *Mailer) sendViaSMTP(to, subject, plain, html string) error {
 	return smtp.SendMail(m.addr, auth, m.cfg.From, []string{to}, msg)
 }
 
-func (m *Mailer) sendSMTPS(msg []byte, to string, auth smtp.Auth) error {
+func (m *Mailer) sendSMTPS(msg []byte, to string, auth smtp.Auth) (retErr error) {
 	conn, err := tls.Dial("tcp", m.addr, &tls.Config{ServerName: m.cfg.Host})
 	if err != nil {
 		return fmt.Errorf("mailer: tls dial: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("mailer: close tls conn: %w", err)
+		}
+	}()
 
 	c, err := smtp.NewClient(conn, m.cfg.Host)
 	if err != nil {
 		return fmt.Errorf("mailer: smtp client: %w", err)
 	}
-	defer c.Quit() //nolint:errcheck
+	defer func() {
+		if err := c.Quit(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("mailer: smtp quit: %w", err)
+		}
+	}()
 
 	if err := c.Auth(auth); err != nil {
 		return fmt.Errorf("mailer: smtp auth: %w", err)

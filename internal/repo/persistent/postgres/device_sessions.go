@@ -2,8 +2,10 @@ package postgres
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"cloud-backend/internal/entity"
 	authuc "cloud-backend/internal/usecase/auth"
@@ -81,7 +83,11 @@ func (s *Storage) RevokeOtherSessions(ctx context.Context, userID, exceptID uuid
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			_ = err // rollback after commit is expected; other errors are unactionable here
+		}
+	}()
 
 	rows, err := tx.Query(ctx,
 		`UPDATE device_sessions
