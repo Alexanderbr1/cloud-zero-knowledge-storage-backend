@@ -95,6 +95,13 @@ services:
       MINIO_REGION: us-east-1
       MINIO_PRESIGN_TTL: 1h
       REDIS_URL: redis://redis:6379/0
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_TLS: ${SMTP_TLS:-false}
     ports:
       - "8080:8080"
     volumes:

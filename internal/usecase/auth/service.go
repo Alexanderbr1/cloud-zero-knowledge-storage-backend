@@ -104,6 +104,13 @@ type TokenIssuer interface {
 	IssueAccess(userID, deviceSessionID uuid.UUID) (token string, expiresInSec int64, err error)
 }
 
+// Notifier sends email notifications for auth events.
+// Implementations must be safe for concurrent use and should return quickly
+// (the caller fires notifications in a goroutine).
+type Notifier interface {
+	NotifyNewLogin(ctx context.Context, toEmail, deviceName, ipAddress string) error
+}
+
 // ─── Сервис ───────────────────────────────────────────────────────────────
 
 type Service struct {
@@ -116,6 +123,7 @@ type Service struct {
 	RefreshTTL     time.Duration
 	SRPSessions    SRPSessionManager
 	Logger         zerolog.Logger
+	Notifier       Notifier
 }
 
 type DeviceInfo struct {
@@ -237,6 +245,14 @@ func (s *Service) LoginFinalize(ctx context.Context, p LoginFinalizeParams) (Log
 	if err != nil {
 		return LoginFinalizeResult{}, err
 	}
+
+	go func() {
+		nctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := s.Notifier.NotifyNewLogin(nctx, entry.Email, p.Device.DeviceName, p.Device.IPAddress); err != nil {
+			s.Logger.Warn().Err(err).Msg("login notification failed")
+		}
+	}()
 
 	return LoginFinalizeResult{M2: m2Hex, Pair: pair, EncryptedPrivateKey: entry.EncryptedPrivateKey}, nil
 }

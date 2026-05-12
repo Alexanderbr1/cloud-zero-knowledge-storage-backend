@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 
 	"cloud-backend/internal/entity"
 )
@@ -71,6 +72,11 @@ type SharedFileResult struct {
 	ContentType string
 }
 
+// Notifier sends email notifications for sharing events.
+type Notifier interface {
+	NotifyNewShare(ctx context.Context, toEmail, ownerEmail, fileName string) error
+}
+
 // ─── Service ─────────────────────────────────────────────────────────────
 
 type Service struct {
@@ -79,6 +85,8 @@ type Service struct {
 	Blobs      BlobStore
 	Objects    ObjectSigner
 	PresignTTL time.Duration
+	Notifier   Notifier
+	Logger     zerolog.Logger
 }
 
 // GetRecipientPublicKey looks up a user's SPKI public key by email.
@@ -119,7 +127,7 @@ func (s *Service) CreateShare(ctx context.Context, p CreateShareParams) (entity.
 		return entity.FileShareView{}, ErrSelfShare
 	}
 
-	return s.Shares.CreateShare(tctx, CreateShareParams{
+	share, err := s.Shares.CreateShare(tctx, CreateShareParams{
 		BlobID:         p.BlobID,
 		OwnerID:        p.OwnerID,
 		RecipientID:    recipientID,
@@ -127,6 +135,19 @@ func (s *Service) CreateShare(ctx context.Context, p CreateShareParams) (entity.
 		WrappedFileKey: p.WrappedFileKey,
 		ExpiresAt:      p.ExpiresAt,
 	})
+	if err != nil {
+		return entity.FileShareView{}, err
+	}
+
+	go func() {
+		nctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := s.Notifier.NotifyNewShare(nctx, share.RecipientEmail, share.OwnerEmail, share.BlobFileName); err != nil {
+			s.Logger.Warn().Err(err).Msg("share notification failed")
+		}
+	}()
+
+	return share, nil
 }
 
 // GetSharedFile returns the share details and a presigned download URL.

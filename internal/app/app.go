@@ -24,6 +24,7 @@ import (
 	sharinguc "cloud-backend/internal/usecase/sharing"
 	storageuc "cloud-backend/internal/usecase/storage"
 	jwtpkg "cloud-backend/pkg/jwt"
+	mailerpkg "cloud-backend/pkg/mailer"
 )
 
 // sessionCleaner — минимальный интерфейс для фоновой джобы очистки сессий.
@@ -65,6 +66,16 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 	blocklist := rediscache.NewSessionBlocklist(redisClient)
 	publicKeyRL := rediscache.NewRateLimiter(redisClient, "rl:pubkey:", 20, time.Minute)
 
+	mailer := mailerpkg.New(mailerpkg.Config{
+		ResendAPIKey: cfg.SMTP.ResendAPIKey,
+		Host:         cfg.SMTP.Host,
+		Port:         cfg.SMTP.Port,
+		Username:     cfg.SMTP.Username,
+		Password:     cfg.SMTP.Password,
+		From:         cfg.SMTP.From,
+		TLS:          cfg.SMTP.TLS,
+	})
+
 	authSvc := &authuc.Service{
 		Users:          store,
 		Sessions:       store,
@@ -75,6 +86,7 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 		RefreshTTL:     cfg.JWT.RefreshTTL,
 		SRPSessions:    memoryrepo.NewSRPSessionStore(ctx),
 		Logger:         log,
+		Notifier:       mailer,
 	}
 
 	ms, err := miniostore.NewStore(miniostore.StoreConfig{
@@ -105,6 +117,8 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 		Blobs:      store,
 		Objects:    ms,
 		PresignTTL: cfg.MinIO.PresignTTL,
+		Notifier:   mailer,
+		Logger:     log,
 	}
 
 	return v1.Deps{

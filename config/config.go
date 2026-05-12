@@ -24,6 +24,7 @@ type Config struct {
 	JWT           JWTConfig
 	RefreshCookie RefreshCookieConfig
 	MinIO         MinIOConfig
+	SMTP          SMTPConfig
 }
 
 // ServerConfig — таймауты HTTP-сервера.
@@ -63,6 +64,18 @@ type MinIOConfig struct {
 	PresignTTL     time.Duration
 }
 
+// SMTPConfig — параметры для отправки email-уведомлений.
+// Resend API используется в приоритете; SMTP — резерв; если ничего не задано — no-op.
+type SMTPConfig struct {
+	ResendAPIKey string // RESEND_API_KEY — preferred (HTTPS/443, works through VPNs)
+	Host         string // SMTP_HOST — fallback
+	Port         int    // SMTP_PORT (default 587)
+	Username     string // SMTP_USERNAME
+	Password     string // SMTP_PASSWORD
+	From         string // SMTP_FROM
+	TLS          bool   // SMTP_TLS — true для SMTPS (port 465)
+}
+
 // Load читает конфигурацию из env и возвращает сразу все ошибки валидации.
 func Load() (Config, error) {
 	l := &loader{}
@@ -88,6 +101,7 @@ func (l *loader) build() Config {
 		JWT:           l.buildJWT(),
 		RefreshCookie: l.buildRefreshCookie(),
 		MinIO:         l.buildMinIO(),
+		SMTP:          l.buildSMTP(),
 	}
 }
 
@@ -144,6 +158,22 @@ func (l *loader) buildMinIO() MinIOConfig {
 	}
 }
 
+func (l *loader) buildSMTP() SMTPConfig {
+	cfg := SMTPConfig{
+		ResendAPIKey: envStr("RESEND_API_KEY", ""),
+		Host:         envStr("SMTP_HOST", ""),
+		Port:         envInt("SMTP_PORT", 587),
+		Username:     envStr("SMTP_USERNAME", ""),
+		Password:     envStr("SMTP_PASSWORD", ""),
+		From:         envStr("SMTP_FROM", ""),
+		TLS:          envBool("SMTP_TLS", false),
+	}
+	if cfg.ResendAPIKey == "" && cfg.Host == "" {
+		l.errs = append(l.errs, "email transport required: set RESEND_API_KEY (preferred) or SMTP_HOST")
+	}
+	return cfg
+}
+
 // requireStr добавляет ошибку, если переменная не задана или пуста.
 func (l *loader) requireStr(key string) string {
 	v := envStr(key, "")
@@ -177,6 +207,19 @@ func envStr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envInt читает целочисленную переменную окружения или возвращает def.
+func envInt(key string, def int) int {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
 }
 
 // envBool читает булеву переменную окружения (1/0, true/false, t/f и т.д.).
