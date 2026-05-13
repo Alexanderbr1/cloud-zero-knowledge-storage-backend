@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -26,7 +27,7 @@ func (s *Storage) GetBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (st
 	var m storageuc.BlobMeta
 	err := s.pool.QueryRow(ctx,
 		`SELECT object_key, content_type, encrypted_file_key, file_iv
-		 FROM stored_blobs WHERE id = $1 AND user_id = $2`,
+		 FROM stored_blobs WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
 		blobID, userID,
 	).Scan(&m.ObjectKey, &m.ContentType, &m.EncryptedFileKey, &m.FileIV)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -38,7 +39,8 @@ func (s *Storage) GetBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (st
 	return m, true, nil
 }
 
-// RemoveBlob атомарно удаляет запись и возвращает objectKey для последующего удаления из MinIO.
+// RemoveBlob hard-deletes a blob record and returns its objectKey for MinIO cleanup.
+// Used internally (e.g. rollback after failed upload). For user-initiated deletes use TrashBlob.
 func (s *Storage) RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error) {
 	err = s.pool.QueryRow(ctx,
 		`DELETE FROM stored_blobs WHERE id = $1 AND user_id = $2 RETURNING object_key`,
@@ -57,7 +59,7 @@ func (s *Storage) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blo
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, file_iv
 		 FROM stored_blobs
-		 WHERE user_id = $1
+		 WHERE user_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`,
 		userID,
 	)
@@ -77,7 +79,7 @@ func (s *Storage) ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folde
 		rows, err = s.pool.Query(ctx,
 			`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, file_iv
 			 FROM stored_blobs
-			 WHERE user_id = $1 AND folder_id IS NULL
+			 WHERE user_id = $1 AND folder_id IS NULL AND deleted_at IS NULL
 			 ORDER BY created_at DESC`,
 			userID,
 		)
@@ -85,7 +87,7 @@ func (s *Storage) ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folde
 		rows, err = s.pool.Query(ctx,
 			`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, file_iv
 			 FROM stored_blobs
-			 WHERE user_id = $1 AND folder_id = $2
+			 WHERE user_id = $1 AND folder_id = $2 AND deleted_at IS NULL
 			 ORDER BY created_at DESC`,
 			userID, folderID,
 		)
@@ -112,7 +114,7 @@ func scanBlobs(rows pgx.Rows, userID uuid.UUID) ([]entity.Blob, error) {
 // MoveBlob updates the folder_id of a blob. Returns false if the blob was not found.
 func (s *Storage) MoveBlob(ctx context.Context, blobID, userID uuid.UUID, folderID *uuid.UUID) (bool, error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE stored_blobs SET folder_id = $3 WHERE id = $1 AND user_id = $2`,
+		`UPDATE stored_blobs SET folder_id = $3 WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
 		blobID, userID, folderID,
 	)
 	if err != nil {
@@ -124,7 +126,7 @@ func (s *Storage) MoveBlob(ctx context.Context, blobID, userID uuid.UUID, folder
 // RenameBlob updates the file_name of a blob. Returns false if the blob was not found.
 func (s *Storage) RenameBlob(ctx context.Context, blobID, userID uuid.UUID, name string) (bool, error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE stored_blobs SET file_name = $3 WHERE id = $1 AND user_id = $2`,
+		`UPDATE stored_blobs SET file_name = $3 WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
 		blobID, userID, name,
 	)
 	if err != nil {
@@ -139,7 +141,7 @@ func (s *Storage) SearchBlobs(ctx context.Context, userID uuid.UUID, query strin
 		        b.created_at, b.encrypted_file_key, b.file_iv, f.name AS folder_name
 		 FROM stored_blobs b
 		 LEFT JOIN folders f ON f.id = b.folder_id
-		 WHERE b.user_id = $1 AND b.file_name ILIKE $2
+		 WHERE b.user_id = $1 AND b.file_name ILIKE $2 AND b.deleted_at IS NULL
 		 ORDER BY b.created_at DESC
 		 LIMIT 200`,
 		userID, "%"+query+"%",
@@ -165,4 +167,119 @@ func scanSearchBlobs(rows pgx.Rows, userID uuid.UUID) ([]storageuc.SearchBlobRec
 		out = append(out, rec)
 	}
 	return out, rows.Err()
+}
+
+// ─── Trash ────────────────────────────────────────────────────────────────────
+
+func (s *Storage) TrashBlob(ctx context.Context, blobID, userID uuid.UUID) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE stored_blobs
+		 SET deleted_at = NOW(), original_folder_id = folder_id
+		 WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
+		blobID, userID,
+	)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (s *Storage) RestoreBlob(ctx context.Context, blobID, userID uuid.UUID) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE stored_blobs b
+		SET deleted_at        = NULL,
+		    folder_id         = CASE
+		        WHEN b.original_folder_id IS NULL THEN NULL
+		        WHEN EXISTS(SELECT 1 FROM folders f WHERE f.id = b.original_folder_id AND f.deleted_at IS NULL)
+		            THEN b.original_folder_id
+		        ELSE NULL
+		    END,
+		    original_folder_id = NULL
+		WHERE b.id = $1 AND b.user_id = $2 AND b.deleted_at IS NOT NULL`,
+		blobID, userID,
+	)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (s *Storage) HardDeleteBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error) {
+	err = s.pool.QueryRow(ctx,
+		`DELETE FROM stored_blobs
+		 WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL
+		 RETURNING object_key`,
+		blobID, userID,
+	).Scan(&objectKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return objectKey, true, nil
+}
+
+func (s *Storage) ListTrashedBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, folder_id, file_name, content_type, object_key, file_size,
+		        created_at, encrypted_file_key, file_iv
+		 FROM stored_blobs b
+		 WHERE b.user_id = $1
+		   AND b.deleted_at IS NOT NULL
+		   AND (
+		       b.folder_id IS NULL
+		       OR NOT EXISTS (
+		           SELECT 1 FROM folders f
+		           WHERE f.id = b.folder_id AND f.deleted_at IS NOT NULL
+		       )
+		   )
+		 ORDER BY b.deleted_at DESC`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanBlobs(rows, userID)
+}
+
+func (s *Storage) EmptyTrashedBlobs(ctx context.Context, userID uuid.UUID) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`DELETE FROM stored_blobs
+		 WHERE user_id = $1 AND deleted_at IS NOT NULL
+		 RETURNING object_key`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanObjectKeys(rows)
+}
+
+func (s *Storage) PurgeExpiredBlobs(ctx context.Context, before time.Time) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`DELETE FROM stored_blobs
+		 WHERE deleted_at IS NOT NULL AND deleted_at < $1
+		 RETURNING object_key`,
+		before,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanObjectKeys(rows)
+}
+
+func scanObjectKeys(rows pgx.Rows) ([]string, error) {
+	var keys []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, rows.Err()
 }

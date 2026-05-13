@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 
 	"cloud-backend/internal/controller/restapi"
 	"cloud-backend/internal/controller/restapi/v1/dto"
@@ -97,7 +98,7 @@ func createShare(d Deps) http.HandlerFunc {
 			ExpiresAt:      expiresAt,
 		})
 		if err != nil {
-			writeSharingErr(w, err)
+			writeSharingErr(w, err, d.Logger)
 			return
 		}
 		restapi.WriteJSON(w, http.StatusCreated, shareToDTO(share, "", ""))
@@ -112,7 +113,7 @@ func listSharedWithMe(d Deps) http.HandlerFunc {
 		}
 		shares, err := d.Sharing.ListSharedWithMe(r.Context(), uid)
 		if err != nil {
-			writeSharingErr(w, err)
+			writeSharingErr(w, err, d.Logger)
 			return
 		}
 		items := make([]dto.ShareResponse, 0, len(shares))
@@ -136,7 +137,7 @@ func listMyShares(d Deps) http.HandlerFunc {
 		}
 		shares, err := d.Sharing.ListMyShares(r.Context(), blobID, ownerID)
 		if err != nil {
-			writeSharingErr(w, err)
+			writeSharingErr(w, err, d.Logger)
 			return
 		}
 		items := make([]dto.ShareResponse, 0, len(shares))
@@ -160,7 +161,7 @@ func getSharedFile(d Deps) http.HandlerFunc {
 		}
 		result, err := d.Sharing.GetSharedFile(r.Context(), shareID, uid)
 		if err != nil {
-			writeSharingErr(w, err)
+			writeSharingErr(w, err, d.Logger)
 			return
 		}
 		restapi.WriteJSON(w, http.StatusOK,
@@ -180,7 +181,7 @@ func revokeShare(d Deps) http.HandlerFunc {
 			return
 		}
 		if err := d.Sharing.RevokeShare(r.Context(), shareID, ownerID); err != nil {
-			writeSharingErr(w, err)
+			writeSharingErr(w, err, d.Logger)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -208,7 +209,7 @@ func shareToDTO(s entity.FileShareView, downloadURL, fileIVB64 string) dto.Share
 	return resp
 }
 
-func writeSharingErr(w http.ResponseWriter, err error) {
+func writeSharingErr(w http.ResponseWriter, err error, log zerolog.Logger) {
 	switch {
 	case errors.Is(err, sharinguc.ErrNotFound):
 		restapi.WriteError(w, http.StatusNotFound, "not found")
@@ -225,6 +226,6 @@ func writeSharingErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, sharinguc.ErrSelfShare):
 		restapi.WriteError(w, http.StatusBadRequest, "cannot share a file with yourself")
 	default:
-		restapi.WriteError(w, http.StatusInternalServerError, "internal error")
+		restapi.WriteInternalError(w, log, err)
 	}
 }

@@ -97,3 +97,28 @@ type RenameFolderRequest struct {
 type MoveFolderRequest struct {
 	ParentID *string `json:"parent_id"` // null/absent = move to root
 }
+
+// ─── Trash ────────────────────────────────────────────────────────────────────
+
+type TrashBlobItem struct {
+	BlobID           string    `json:"blob_id"`
+	FolderID         *string   `json:"folder_id"`
+	FileName         string    `json:"file_name"`
+	ContentType      string    `json:"content_type"`
+	FileSize         int64     `json:"file_size"`
+	CreatedAt        time.Time `json:"created_at"`
+	EncryptedFileKey string    `json:"encrypted_file_key"`
+	FileIV           string    `json:"file_iv"`
+}
+
+type TrashFolderItem struct {
+	FolderID  string    `json:"folder_id"`
+	ParentID  *string   `json:"parent_id"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type TrashListResponse struct {
+	Blobs   []TrashBlobItem   `json:"blobs"`
+	Folders []TrashFolderItem `json:"folders"`
+}

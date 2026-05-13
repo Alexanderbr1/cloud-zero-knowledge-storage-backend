@@ -32,6 +32,11 @@ type sessionCleaner interface {
 	CleanOrphanedSessions(ctx context.Context) error
 }
 
+// trashCleaner — минимальный интерфейс для фоновой джобы очистки корзины.
+type trashCleaner interface {
+	CleanExpiredTrash(ctx context.Context, ttl time.Duration) error
+}
+
 func Run(cfg config.Config, log zerolog.Logger) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -42,26 +47,27 @@ func Run(cfg config.Config, log zerolog.Logger) error {
 	}
 	defer pool.Close()
 
-	deps, cleaner, cleanup, err := wireDeps(ctx, cfg, log, pool)
+	deps, cleaner, trashSvc, cleanup, err := wireDeps(ctx, cfg, log, pool)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
 	go runSessionCleanupJob(ctx, cleaner, log)
+	go runTrashCleanupJob(ctx, trashSvc, log)
 
 	return serve(ctx, newHTTPServer(cfg, deps, log), log, cfg.Server.ShutdownTimeout)
 }
 
 // wireDeps строит граф зависимостей приложения поверх уже открытого пула БД.
-// Возвращает deps, cleaner для фоновой джобы, cleanup для внешних соединений.
-func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *pgxpool.Pool) (v1.Deps, sessionCleaner, func(), error) {
+// Возвращает deps, sessionCleaner, trashCleaner, cleanup для внешних соединений.
+func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *pgxpool.Pool) (v1.Deps, sessionCleaner, trashCleaner, func(), error) {
 	store := postgres.NewStorage(pool)
 	tokens := jwtpkg.NewService([]byte(cfg.JWT.Secret), cfg.JWT.AccessTTL)
 
 	redisClient, cleanup, err := connectRedis(ctx, cfg.RedisURL, log)
 	if err != nil {
-		return v1.Deps{}, nil, func() {}, err
+		return v1.Deps{}, nil, nil, func() {}, err
 	}
 
 	blocklist := rediscache.NewSessionBlocklist(redisClient)
@@ -100,10 +106,10 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 		Region:         cfg.MinIO.Region,
 	})
 	if err != nil {
-		return v1.Deps{}, nil, cleanup, fmt.Errorf("minio: %w", err)
+		return v1.Deps{}, nil, nil, cleanup, fmt.Errorf("minio: %w", err)
 	}
 	if err := ms.EnsureBucket(ctx); err != nil {
-		return v1.Deps{}, nil, cleanup, fmt.Errorf("minio bucket: %w", err)
+		return v1.Deps{}, nil, nil, cleanup, fmt.Errorf("minio bucket: %w", err)
 	}
 	storageSvc := &storageuc.Service{
 		Objects:    ms,
@@ -131,7 +137,7 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 		PublicKeyRateLimiter: publicKeyRL,
 		RefreshCookie:        cfg.RefreshCookie,
 		Logger:               log,
-	}, authSvc, cleanup, nil
+	}, authSvc, storageSvc, cleanup, nil
 }
 
 func newHTTPServer(cfg config.Config, deps v1.Deps, log zerolog.Logger) *http.Server {
@@ -155,6 +161,25 @@ func runSessionCleanupJob(ctx context.Context, svc sessionCleaner, log zerolog.L
 			cleanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			if err := svc.CleanOrphanedSessions(cleanCtx); err != nil {
 				log.Error().Err(err).Msg("session cleanup job failed")
+			}
+			cancel()
+		}
+	}
+}
+
+const trashTTL = 30 * 24 * time.Hour
+
+func runTrashCleanupJob(ctx context.Context, svc trashCleaner, log zerolog.Logger) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cleanCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			if err := svc.CleanExpiredTrash(cleanCtx, trashTTL); err != nil {
+				log.Error().Err(err).Msg("trash cleanup job failed")
 			}
 			cancel()
 		}

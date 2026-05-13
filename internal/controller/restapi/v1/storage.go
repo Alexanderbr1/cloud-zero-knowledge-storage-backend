@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 
 	"cloud-backend/internal/controller/restapi"
 	"cloud-backend/internal/controller/restapi/v1/dto"
@@ -56,7 +57,7 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 			FileIV: fileIV, FolderID: folderID,
 		})
 		if err != nil {
-			writeStorageErr(w, err)
+			writeStorageErr(w, err, d.Logger)
 			return
 		}
 		restapi.WriteJSON(w, http.StatusOK, dto.StoragePresignPutResponse{
@@ -82,7 +83,7 @@ func storagePresignGet(d Deps) http.HandlerFunc {
 		}
 		out, err := d.Storage.PresignGet(r.Context(), uid, blobID)
 		if err != nil {
-			writeStorageErr(w, err)
+			writeStorageErr(w, err, d.Logger)
 			return
 		}
 		restapi.WriteJSON(w, http.StatusOK, dto.StoragePresignGetResponse{
@@ -109,7 +110,7 @@ func storageDeleteBlob(d Deps) http.HandlerFunc {
 			return
 		}
 		if err := d.Storage.DeleteBlob(r.Context(), uid, blobID); err != nil {
-			writeStorageErr(w, err)
+			writeStorageErr(w, err, d.Logger)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -142,7 +143,7 @@ func storageListBlobs(d Deps) http.HandlerFunc {
 			blobs, err = d.Storage.ListBlobsInFolder(r.Context(), uid, &folderID)
 		}
 		if err != nil {
-			writeStorageErr(w, err)
+			writeStorageErr(w, err, d.Logger)
 			return
 		}
 
@@ -197,7 +198,7 @@ func renameBlob(d Deps) http.HandlerFunc {
 			return
 		}
 		if err := d.Storage.RenameBlob(r.Context(), uid, blobID, name); err != nil {
-			writeStorageErr(w, err)
+			writeStorageErr(w, err, d.Logger)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -217,7 +218,7 @@ func storageSearch(d Deps) http.HandlerFunc {
 		}
 		result, err := d.Storage.Search(r.Context(), storageuc.SearchParams{UserID: uid, Query: q})
 		if err != nil {
-			restapi.WriteError(w, http.StatusInternalServerError, "internal error")
+			restapi.WriteInternalError(w, d.Logger, err)
 			return
 		}
 
@@ -253,13 +254,13 @@ func searchBlobToDTO(b storageuc.SearchBlobRecord) dto.SearchBlobItem {
 	return item
 }
 
-func writeStorageErr(w http.ResponseWriter, err error) {
+func writeStorageErr(w http.ResponseWriter, err error, log zerolog.Logger) {
 	switch {
 	case errors.Is(err, storageuc.ErrNotFound):
 		restapi.WriteError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, storageuc.ErrFolderNotFound):
 		restapi.WriteError(w, http.StatusNotFound, "folder not found")
 	default:
-		restapi.WriteError(w, http.StatusInternalServerError, "internal error")
+		restapi.WriteInternalError(w, log, err)
 	}
 }

@@ -44,7 +44,7 @@ func (s *Storage) GetBlobInfo(ctx context.Context, blobID uuid.UUID) (sharinguc.
 	var info sharinguc.BlobInfo
 	err := s.pool.QueryRow(ctx,
 		`SELECT object_key, file_name, content_type, file_iv, user_id
-		 FROM stored_blobs WHERE id = $1`,
+		 FROM stored_blobs WHERE id = $1 AND deleted_at IS NULL`,
 		blobID,
 	).Scan(&info.ObjectKey, &info.FileName, &info.ContentType, &info.FileIV, &info.OwnerID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -126,6 +126,7 @@ func (s *Storage) ListSharedWithUser(ctx context.Context, recipientID uuid.UUID)
 		 JOIN users recipient ON recipient.id = fs.recipient_id
 		 WHERE fs.recipient_id = $1
 		   AND fs.revoked_at IS NULL
+		   AND sb.deleted_at IS NULL
 		   AND (fs.expires_at IS NULL OR fs.expires_at > now())
 		 ORDER BY fs.created_at DESC`,
 		recipientID,

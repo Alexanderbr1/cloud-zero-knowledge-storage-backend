@@ -23,7 +23,7 @@ func listSessions(d Deps) http.HandlerFunc {
 
 		sessions, err := d.Auth.ListDeviceSessions(r.Context(), userID)
 		if err != nil {
-			restapi.WriteError(w, http.StatusInternalServerError, "internal error")
+			restapi.WriteInternalError(w, d.Logger, err)
 			return
 		}
 
@@ -53,7 +53,7 @@ func revokeSession(d Deps) http.HandlerFunc {
 				restapi.WriteError(w, http.StatusNotFound, "session not found")
 				return
 			}
-			restapi.WriteError(w, http.StatusInternalServerError, "internal error")
+			restapi.WriteInternalError(w, d.Logger, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -69,7 +69,7 @@ func revokeOtherSessions(d Deps) http.HandlerFunc {
 		currentSessionID := restapi.SessionIDFromContext(r.Context())
 
 		if err := d.Auth.RevokeOtherDeviceSessions(r.Context(), userID, currentSessionID); err != nil {
-			restapi.WriteError(w, http.StatusInternalServerError, "internal error")
+			restapi.WriteInternalError(w, d.Logger, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/rs/zerolog"
+
 	"cloud-backend/config"
 	"cloud-backend/internal/controller/restapi"
 	"cloud-backend/internal/controller/restapi/v1/dto"
@@ -44,7 +46,7 @@ func register(d Deps) http.HandlerFunc {
 			Device: parseDeviceInfo(r),
 		})
 		if err != nil {
-			writeAuthErr(w, err)
+			writeAuthErr(w, err, d.Logger)
 			return
 		}
 		writeTokenResponse(w, d.RefreshCookie, http.StatusCreated, pair, "", nil)
@@ -64,7 +66,7 @@ func loginInit(d Deps) http.HandlerFunc {
 		}
 		result, err := d.Auth.LoginInit(r.Context(), in.Email, in.A)
 		if err != nil {
-			writeAuthErr(w, err)
+			writeAuthErr(w, err, d.Logger)
 			return
 		}
 		restapi.WriteJSON(w, http.StatusOK, dto.LoginInitResponse{
@@ -92,7 +94,7 @@ func loginFinalize(d Deps) http.HandlerFunc {
 			SessionID: in.SessionID, M1: in.M1, Device: parseDeviceInfo(r),
 		})
 		if err != nil {
-			writeAuthErr(w, err)
+			writeAuthErr(w, err, d.Logger)
 			return
 		}
 		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, result.Pair, result.M2, result.EncryptedPrivateKey)
@@ -111,7 +113,7 @@ func refresh(d Deps) http.HandlerFunc {
 			if errors.Is(err, authuc.ErrInvalidRefresh) {
 				clearRefreshTokenCookie(w, d.RefreshCookie)
 			}
-			writeAuthErr(w, err)
+			writeAuthErr(w, err, d.Logger)
 			return
 		}
 		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, pair, "", nil)
@@ -149,7 +151,7 @@ func writeTokenResponse(w http.ResponseWriter, cookieCfg config.RefreshCookieCon
 	restapi.WriteJSON(w, status, resp)
 }
 
-func writeAuthErr(w http.ResponseWriter, err error) {
+func writeAuthErr(w http.ResponseWriter, err error, log zerolog.Logger) {
 	switch {
 	case errors.Is(err, authuc.ErrInvalidInput):
 		restapi.WriteError(w, http.StatusBadRequest, "bad request")
@@ -160,6 +162,7 @@ func writeAuthErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, authuc.ErrInvalidRefresh):
 		restapi.WriteError(w, http.StatusUnauthorized, "invalid refresh token")
 	default:
+		log.Error().Err(err).Msg("auth handler error")
 		restapi.WriteError(w, http.StatusInternalServerError, "internal error")
 	}
 }

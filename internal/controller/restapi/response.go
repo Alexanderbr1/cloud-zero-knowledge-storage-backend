@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+
+	"github.com/rs/zerolog"
 )
 
 // maxJSONBodyBytes — защита от чрезмерно больших JSON-тел.
@@ -34,6 +36,11 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 
 func WriteError(w http.ResponseWriter, status int, msg string) {
 	WriteJSON(w, status, errorResponse{Error: msg})
+}
+
+func WriteInternalError(w http.ResponseWriter, log zerolog.Logger, err error) {
+	log.Error().Err(err).Msg("internal server error")
+	WriteJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 }
 
 // DecodeJSON читает тело запроса как JSON с ограничением размера.

@@ -46,6 +46,14 @@ type StorageService interface {
 	MoveFolder(ctx context.Context, p storageuc.MoveFolderParams) error
 	DeleteFolder(ctx context.Context, userID, folderID uuid.UUID) error
 	Search(ctx context.Context, p storageuc.SearchParams) (storageuc.SearchResult, error)
+
+	// Trash
+	ListTrash(ctx context.Context, userID uuid.UUID) (storageuc.TrashResult, error)
+	RestoreBlob(ctx context.Context, userID, blobID uuid.UUID) error
+	HardDeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error
+	RestoreFolder(ctx context.Context, userID, folderID uuid.UUID) error
+	HardDeleteFolder(ctx context.Context, userID, folderID uuid.UUID) error
+	EmptyTrash(ctx context.Context, userID uuid.UUID) error
 }
 
 // SharingService — бизнес-логика шаринга файлов.
@@ -110,6 +118,15 @@ func NewRouter(d Deps) chi.Router {
 			r.Patch("/folders/{folderID}", renameFolder(d))
 			r.Patch("/folders/{folderID}/move", moveFolder(d))
 			r.Delete("/folders/{folderID}", deleteFolder(d))
+		})
+
+		r.Route("/trash", func(r chi.Router) {
+			r.Get("/", trashList(d))
+			r.Delete("/", trashEmpty(d))
+			r.Post("/blobs/{blobID}/restore", trashRestoreBlob(d))
+			r.Delete("/blobs/{blobID}", trashDeleteBlob(d))
+			r.Post("/folders/{folderID}/restore", trashRestoreFolder(d))
+			r.Delete("/folders/{folderID}", trashDeleteFolder(d))
 		})
 
 		r.Route("/shares", func(r chi.Router) {

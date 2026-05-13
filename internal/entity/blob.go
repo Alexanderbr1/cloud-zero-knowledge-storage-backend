@@ -18,4 +18,8 @@ type Blob struct {
 	CreatedAt        time.Time
 	EncryptedFileKey []byte // AES-KW обёрнутый файловый ключ
 	FileIV           []byte // 12-байтовый IV для AES-GCM
+
+	// Trash fields — non-nil only for items in the recycle bin.
+	DeletedAt        *time.Time
+	OriginalFolderID *uuid.UUID
 }

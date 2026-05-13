@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 
 	"cloud-backend/internal/controller/restapi"
 	"cloud-backend/internal/controller/restapi/v1/dto"
@@ -49,7 +50,7 @@ func createFolder(d Deps) http.HandlerFunc {
 			Name:     name,
 		})
 		if err != nil {
-			writeFolderErr(w, err)
+			writeFolderErr(w, err, d.Logger)
 			return
 		}
 		restapi.WriteJSON(w, http.StatusCreated, folderToDTO(folder))
@@ -69,7 +70,7 @@ func getFolder(d Deps) http.HandlerFunc {
 		}
 		folder, err := d.Storage.GetFolder(r.Context(), uid, folderID)
 		if err != nil {
-			writeFolderErr(w, err)
+			writeFolderErr(w, err, d.Logger)
 			return
 		}
 		restapi.WriteJSON(w, http.StatusOK, folderToDTO(folder))
@@ -93,7 +94,7 @@ func listFolders(d Deps) http.HandlerFunc {
 		}
 		folders, err := d.Storage.ListFolders(r.Context(), uid, parentID)
 		if err != nil {
-			writeFolderErr(w, err)
+			writeFolderErr(w, err, d.Logger)
 			return
 		}
 		items := make([]dto.FolderItem, 0, len(folders))
@@ -131,7 +132,7 @@ func renameFolder(d Deps) http.HandlerFunc {
 		}
 		folder, err := d.Storage.RenameFolder(r.Context(), uid, folderID, name)
 		if err != nil {
-			writeFolderErr(w, err)
+			writeFolderErr(w, err, d.Logger)
 			return
 		}
 		restapi.WriteJSON(w, http.StatusOK, folderToDTO(folder))
@@ -168,7 +169,7 @@ func moveFolder(d Deps) http.HandlerFunc {
 			UserID:      uid,
 			NewParentID: newParentID,
 		}); err != nil {
-			writeFolderErr(w, err)
+			writeFolderErr(w, err, d.Logger)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -187,7 +188,7 @@ func deleteFolder(d Deps) http.HandlerFunc {
 			return
 		}
 		if err := d.Storage.DeleteFolder(r.Context(), uid, folderID); err != nil {
-			writeFolderErr(w, err)
+			writeFolderErr(w, err, d.Logger)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -220,7 +221,7 @@ func moveBlob(d Deps) http.HandlerFunc {
 			folderID = &parsed
 		}
 		if err := d.Storage.MoveBlob(r.Context(), uid, blobID, folderID); err != nil {
-			writeFolderErr(w, err)
+			writeFolderErr(w, err, d.Logger)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -241,7 +242,7 @@ func folderToDTO(f entity.Folder) dto.FolderItem {
 	return item
 }
 
-func writeFolderErr(w http.ResponseWriter, err error) {
+func writeFolderErr(w http.ResponseWriter, err error, log zerolog.Logger) {
 	switch {
 	case errors.Is(err, storageuc.ErrFolderNotFound):
 		restapi.WriteError(w, http.StatusNotFound, "folder not found")
@@ -254,6 +255,6 @@ func writeFolderErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, storageuc.ErrNotFound):
 		restapi.WriteError(w, http.StatusNotFound, "not found")
 	default:
-		restapi.WriteError(w, http.StatusInternalServerError, "internal error")
+		restapi.WriteInternalError(w, log, err)
 	}
 }
