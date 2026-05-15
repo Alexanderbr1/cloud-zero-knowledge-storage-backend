@@ -1,6 +1,7 @@
 .PHONY: up down restart logs ps build
 
 up:
+	@[ -f .env ] || bash setup.sh
 	docker compose up -d --build
 
 down:

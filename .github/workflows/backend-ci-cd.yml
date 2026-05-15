@@ -7,7 +7,7 @@
 #   DEPLOY_PATH      — каталог git clone этого репозитория на сервере
 #
 # На сервере: Docker + compose, затем git clone <backend-repo> в DEPLOY_PATH,
-# первый раз: cd DEPLOY_PATH && docker compose up -d
+# первый раз: cd DEPLOY_PATH && make up  (генерирует .env и поднимает стек)
 
 name: Backend CI/CD
 
@@ -20,6 +20,7 @@ on:
       - "go.sum"
       - "Dockerfile"
       - "docker-compose.yml"
+      - "Makefile"
       - "migrations/**"
       - ".golangci.yml"
       - ".github/workflows/backend-ci-cd.yml"
@@ -83,7 +84,7 @@ jobs:
             git checkout master
             git pull origin master
 
-            docker compose up -d postgres minio minio-init
+            docker compose up -d postgres minio
 
             docker compose build migrate
             docker compose run --rm migrate
