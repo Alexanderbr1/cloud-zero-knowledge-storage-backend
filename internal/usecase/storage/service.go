@@ -79,7 +79,7 @@ func (s *Service) PresignPut(ctx context.Context, p PresignPutParams) (*PresignP
 	p.ContentType = strings.TrimSpace(p.ContentType)
 	blobID := uuid.New()
 	cleanName := sanitizeFileName(p.FileName)
-	objectKey := fmt.Sprintf("blobs/%s/%s", p.UserID, blobID)
+	objectKey := fmt.Sprintf("%s/%s", p.UserID, blobID)
 
 	if s.MaxUploadBytes > 0 && p.FileSize > s.MaxUploadBytes {
 		return nil, ErrFileTooLarge
