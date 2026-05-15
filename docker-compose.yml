@@ -33,7 +33,7 @@ services:
       MINIO_API_CORS_ALLOW_ORIGIN: ${MINIO_API_CORS_ALLOW_ORIGIN:-*}
       MINIO_SERVER_URL: ${MINIO_SERVER_URL:-}
     ports:
-      - "127.0.0.1:9000:9000"  # proxied via nginx
+      - "127.0.0.1:9000:9000"  # proxied via caddy
       - "127.0.0.1:9001:9001"  # admin console
     volumes:
       - minio-data:/data
@@ -102,7 +102,7 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       SMTP_FROM: ${SMTP_FROM:-}
     ports:
-      - "127.0.0.1:8080:8080"  # proxied via nginx
+      - "8080:8080"
     restart: unless-stopped
 
 volumes:
