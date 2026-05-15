@@ -11,7 +11,6 @@ import (
 	v1 "cloud-backend/internal/controller/restapi/v1"
 )
 
-// newHTTPHandler собирает chi-роутер с глобальными middleware.
 // Глобальный Timeout не задаётся: загрузки blob'ов длинные; лимиты — http.Server + /storage Timeout.
 func newHTTPHandler(deps v1.Deps, log zerolog.Logger) http.Handler {
 	r := chi.NewRouter()

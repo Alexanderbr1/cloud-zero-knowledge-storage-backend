@@ -10,6 +10,17 @@ import (
 	"github.com/go-playground/validator/v10"
 )
 
+type fieldError struct {
+	Field string `json:"field"`
+	Tag   string `json:"tag"`
+	Value string `json:"value"`
+}
+
+type validationErrorResponse struct {
+	Error  string       `json:"error"`
+	Fields []fieldError `json:"fields"`
+}
+
 var validate = func() *validator.Validate {
 	v := validator.New(validator.WithRequiredStructEnabled())
 	v.RegisterTagNameFunc(func(f reflect.StructField) string {
@@ -30,7 +41,6 @@ func WriteValidationError(w http.ResponseWriter, err error) {
 	if err == nil {
 		return
 	}
-
 	var verrs validator.ValidationErrors
 	if errors.As(err, &verrs) {
 		fields := make([]fieldError, 0, len(verrs))
@@ -47,6 +57,5 @@ func WriteValidationError(w http.ResponseWriter, err error) {
 		})
 		return
 	}
-
 	WriteError(w, http.StatusBadRequest, "bad request")
 }

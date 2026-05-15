@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"net/http"
@@ -12,6 +13,14 @@ import (
 	"cloud-backend/internal/controller/restapi/v1/dto"
 	authuc "cloud-backend/internal/usecase/auth"
 )
+
+type AuthService interface {
+	Register(ctx context.Context, p authuc.RegisterParams) (authuc.TokenPair, error)
+	LoginInit(ctx context.Context, email, aHex string) (authuc.LoginInitResult, error)
+	LoginFinalize(ctx context.Context, p authuc.LoginFinalizeParams) (authuc.LoginFinalizeResult, error)
+	Refresh(ctx context.Context, refreshToken string) (authuc.TokenPair, error)
+	Logout(ctx context.Context, refreshToken string) error
+}
 
 const tokenTypeBearer = "Bearer"
 
@@ -40,10 +49,14 @@ func register(d Deps) http.HandlerFunc {
 			return
 		}
 		pair, err := d.Auth.Register(r.Context(), authuc.RegisterParams{
-			Email: in.Email, SRPSalt: in.SRPSalt, SRPVerifier: in.SRPVerifier,
-			BcryptSalt: in.BcryptSalt, CryptoSalt: cryptoSalt,
-			PublicKey: publicKey, EncryptedPrivateKey: encPrivKey,
-			Device: parseDeviceInfo(r),
+			Email:               in.Email,
+			SRPSalt:             in.SRPSalt,
+			SRPVerifier:         in.SRPVerifier,
+			BcryptSalt:          in.BcryptSalt,
+			CryptoSalt:          cryptoSalt,
+			PublicKey:           publicKey,
+			EncryptedPrivateKey: encPrivKey,
+			Device:              parseDeviceInfo(r),
 		})
 		if err != nil {
 			writeAuthErr(w, err, d.Logger)
@@ -91,7 +104,9 @@ func loginFinalize(d Deps) http.HandlerFunc {
 			return
 		}
 		result, err := d.Auth.LoginFinalize(r.Context(), authuc.LoginFinalizeParams{
-			SessionID: in.SessionID, M1: in.M1, Device: parseDeviceInfo(r),
+			SessionID: in.SessionID,
+			M1:        in.M1,
+			Device:    parseDeviceInfo(r),
 		})
 		if err != nil {
 			writeAuthErr(w, err, d.Logger)
@@ -131,7 +146,14 @@ func logout(d Deps) http.HandlerFunc {
 	}
 }
 
-func writeTokenResponse(w http.ResponseWriter, cookieCfg config.RefreshCookieConfig, status int, pair authuc.TokenPair, m2 string, encPrivKey []byte) {
+func writeTokenResponse(
+	w http.ResponseWriter,
+	cookieCfg config.RefreshCookieConfig,
+	status int,
+	pair authuc.TokenPair,
+	m2 string,
+	encPrivKey []byte,
+) {
 	maxAge := int(pair.RefreshExpiresIn)
 	if maxAge < 0 {
 		maxAge = 0

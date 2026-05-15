@@ -12,7 +12,17 @@ import (
 	storageuc "cloud-backend/internal/usecase/storage"
 )
 
-var _ storageuc.BlobRegistry = (*Storage)(nil)
+var _ storageuc.BlobRepo = (*Storage)(nil)
+var _ storageuc.BlobTrashRepo = (*Storage)(nil)
+
+func (s *Storage) GetUserStorageUsed(ctx context.Context, userID uuid.UUID) (int64, error) {
+	var total int64
+	err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(SUM(file_size), 0) FROM stored_blobs WHERE user_id = $1 AND deleted_at IS NULL`,
+		userID,
+	).Scan(&total)
+	return total, err
+}
 
 func (s *Storage) RegisterBlob(ctx context.Context, p storageuc.RegisterBlobParams) error {
 	_, err := s.pool.Exec(ctx,
@@ -111,7 +121,6 @@ func scanBlobs(rows pgx.Rows, userID uuid.UUID) ([]entity.Blob, error) {
 	return out, rows.Err()
 }
 
-// MoveBlob updates the folder_id of a blob. Returns false if the blob was not found.
 func (s *Storage) MoveBlob(ctx context.Context, blobID, userID uuid.UUID, folderID *uuid.UUID) (bool, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE stored_blobs SET folder_id = $3 WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
@@ -123,7 +132,6 @@ func (s *Storage) MoveBlob(ctx context.Context, blobID, userID uuid.UUID, folder
 	return tag.RowsAffected() > 0, nil
 }
 
-// RenameBlob updates the file_name of a blob. Returns false if the blob was not found.
 func (s *Storage) RenameBlob(ctx context.Context, blobID, userID uuid.UUID, name string) (bool, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE stored_blobs SET file_name = $3 WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
@@ -141,10 +149,10 @@ func (s *Storage) SearchBlobs(ctx context.Context, userID uuid.UUID, query strin
 		        b.created_at, b.encrypted_file_key, b.file_iv, f.name AS folder_name
 		 FROM stored_blobs b
 		 LEFT JOIN folders f ON f.id = b.folder_id
-		 WHERE b.user_id = $1 AND b.file_name ILIKE $2 AND b.deleted_at IS NULL
+		 WHERE b.user_id = $1 AND b.file_name ILIKE $2 ESCAPE '\' AND b.deleted_at IS NULL
 		 ORDER BY b.created_at DESC
 		 LIMIT 200`,
-		userID, "%"+query+"%",
+		userID, "%"+escapeLike(query)+"%",
 	)
 	if err != nil {
 		return nil, err
@@ -169,12 +177,10 @@ func scanSearchBlobs(rows pgx.Rows, userID uuid.UUID) ([]storageuc.SearchBlobRec
 	return out, rows.Err()
 }
 
-// ─── Trash ────────────────────────────────────────────────────────────────────
-
 func (s *Storage) TrashBlob(ctx context.Context, blobID, userID uuid.UUID) (bool, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE stored_blobs
-		 SET deleted_at = NOW(), original_folder_id = folder_id
+		 SET deleted_at = NOW()
 		 WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
 		blobID, userID,
 	)
@@ -187,14 +193,12 @@ func (s *Storage) TrashBlob(ctx context.Context, blobID, userID uuid.UUID) (bool
 func (s *Storage) RestoreBlob(ctx context.Context, blobID, userID uuid.UUID) (bool, error) {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE stored_blobs b
-		SET deleted_at        = NULL,
-		    folder_id         = CASE
-		        WHEN b.original_folder_id IS NULL THEN NULL
-		        WHEN EXISTS(SELECT 1 FROM folders f WHERE f.id = b.original_folder_id AND f.deleted_at IS NULL)
-		            THEN b.original_folder_id
+		SET deleted_at = NULL,
+		    folder_id  = CASE
+		        WHEN EXISTS(SELECT 1 FROM folders f WHERE f.id = b.folder_id AND f.deleted_at IS NULL)
+		            THEN b.folder_id
 		        ELSE NULL
-		    END,
-		    original_folder_id = NULL
+		    END
 		WHERE b.id = $1 AND b.user_id = $2 AND b.deleted_at IS NOT NULL`,
 		blobID, userID,
 	)

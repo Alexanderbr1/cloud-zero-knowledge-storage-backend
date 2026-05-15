@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	authuc "cloud-backend/internal/usecase/auth"
@@ -43,19 +42,4 @@ func (s *Storage) ConsumeRefreshSession(ctx context.Context, tokenHash []byte) (
 		return authuc.ConsumedSession{}, false, err
 	}
 	return cs, true, nil
-}
-
-func (s *Storage) ConsumeAndGetSession(ctx context.Context, refreshTokenHash []byte) (userID, deviceSessionID uuid.UUID, err error) {
-	err = s.pool.QueryRow(ctx,
-		`UPDATE refresh_sessions
-		   SET revoked_at = now()
-		 WHERE refresh_token_hash = $1
-		   AND revoked_at IS NULL
-		 RETURNING user_id, device_session_id`,
-		refreshTokenHash,
-	).Scan(&userID, &deviceSessionID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, uuid.Nil, nil
-	}
-	return userID, deviceSessionID, err
 }

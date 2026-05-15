@@ -1,118 +1,156 @@
-# cloud-backend
+# EncryptDrive
 
-Backend для загрузки файлов в MinIO/S3: **JWT (email + пароль)** и presigned PUT/GET. Объекты в бакете лежат по пути **`blobs/<user_id>/<blob_id>`**; в БД дополнительно хранится человекочитаемое `file_name` для списка.
+End-to-end encrypted file storage. Files are encrypted in the browser before upload — the server never sees plaintext.
 
-## Структура
+## Self-Hosted Setup
 
-| Путь | Назначение |
-|------|------------|
-| `cmd/app/main.go` | Точка входа: конфиг, логирование, `app.Run` |
-| `config/` | Загрузка конфигурации из env (twelve-factor) |
-| `internal/app/` | Composition root: DI, миграции, сборка HTTP |
-| `internal/controller/restapi/` | REST delivery (middleware, JSON, validator) |
-| `internal/controller/restapi/v1/` | Маршруты API v1 |
-| `internal/controller/restapi/v1/dto/` | JSON-модели запросов/ответов (`json` + `validate`) |
-| `internal/entity/` | Доменные сущности |
-| `internal/usecase/auth/` | Регистрация, вход, refresh/logout |
-| `internal/usecase/storage/` | Presign PUT/GET в объектное хранилище |
-| `internal/repo/persistent/postgres/` | Реализация репозиториев + миграции (pgx) |
-| `internal/repo/storage/minio/` | MinIO (S3 API) |
-| `pkg/jwt/` | Подпись и проверка access JWT (HS256) |
-| `migrations/` | SQL-миграции (golang-migrate, embed) |
+### Requirements
 
-## Запуск
+- Docker + Docker Compose
+- A domain pointing to your server (A record → server IP)
+- Ports 80 and 443 open
+
+### Quick Start
 
 ```bash
-export DATABASE_URL=postgres://...
-export JWT_SECRET=...   # обязательно
+# 1. Generate .env with random secrets
+cd cloud-backend
+./setup.sh
 
-# опционально: DB_INIT=true для применения миграций при старте
+# 2. Set your public URL in .env
+#    MINIO_PUBLIC_ENDPOINT=https://drive.example.com
+#    FRONTEND_ORIGIN=https://drive.example.com
+#    MINIO_API_CORS_ALLOW_ORIGIN=https://drive.example.com
+#    MINIO_SERVER_URL=https://drive.example.com
 
-# MinIO (если задан MINIO_ENDPOINT — поднимаются эндпоинты /v1/storage/*)
-export MINIO_ENDPOINT=127.0.0.1:9000
-export MINIO_PUBLIC_ENDPOINT=http://localhost:9000   # хост в presigned URL для браузера
-export MINIO_ACCESS_KEY=minioadmin
-export MINIO_SECRET_KEY=minioadmin
-export MINIO_BUCKET=blobs
+# 3. Set your domain in cloud-frontend/.env
+echo "DOMAIN=drive.example.com" > ../cloud-frontend/.env
 
-go run ./cmd/app
+# 4. Start the backend
+docker compose up -d
+
+# 5. Start the frontend (with Caddy for automatic HTTPS)
+cd ../cloud-frontend
+docker compose up -d
 ```
 
-### Аутентификация (JWT)
+Caddy automatically obtains a Let's Encrypt certificate on first start.
 
-| Метод | Путь | Описание |
-|--------|------|----------|
-| `POST` | `/v1/auth/register` | Тело: `{"email":"...","password":"...","crypto_salt":"..."}` (пароль min 8 символов; `crypto_salt` — base64, 16 байт с клиента). **201** + JSON с access, **`crypto_salt`** (эхо для клиента) и **Set-Cookie** с refresh. |
-| `POST` | `/v1/auth/login` | Тело: `{"email":"...","password":"..."}`. **200** + JSON с access, **`crypto_salt`** (для PBKDF2 на клиенте только после успешной проверки пароля) и **Set-Cookie** с refresh. |
-| `POST` | `/v1/auth/refresh` | Тело не нужно: refresh берётся из **HttpOnly**-куки (имя по умолчанию `refresh_token`). **200** + новый access и новая кука (ротация). **401** — нет/невалидный refresh (кука сбрасывается). |
-| `POST` | `/v1/auth/logout` | Refresh из куки; **204** — кука очищается, сессия отзывается при наличии валидного токена (идемпотентно). |
+### Key Environment Variables
 
-Ответ register/login в JSON: `access_token`, `expires_in`, `refresh_expires_in`, `token_type`: `Bearer`, `crypto_salt` (base64). Ответ **refresh** — те же поля токена **без** `crypto_salt`. Сам **refresh-токен в JSON не отдаётся** — только в куке `HttpOnly`; при HTTPS включайте `REFRESH_COOKIE_SECURE=true`.
+| Variable | Default | Description |
+|---|---|---|
+| `MINIO_PUBLIC_ENDPOINT` | — | **Required.** Public HTTPS URL, e.g. `https://drive.example.com` |
+| `FRONTEND_ORIGIN` | — | **Required.** Same as above — used for CORS |
+| `REGISTRATION_ENABLED` | `true` | Set to `false` to prevent new signups |
+| `MAX_UPLOAD_BYTES` | `0` | Max file size in bytes (0 = unlimited) |
+| `STORAGE_QUOTA_BYTES` | `0` | Storage limit per user in bytes (0 = unlimited) |
+| `RESEND_API_KEY` | — | Optional. Resend key for email notifications |
+| `REFRESH_COOKIE_SECURE` | `false` | Set to `true` when serving over HTTPS |
 
-Переменные: `JWT_ACCESS_TTL` (например `15m`), `JWT_REFRESH_TTL` (например `720h`), опционально кука: `REFRESH_COOKIE_NAME`, `REFRESH_COOKIE_PATH`, `REFRESH_COOKIE_DOMAIN`, `REFRESH_COOKIE_SECURE`, `REFRESH_COOKIE_SAMESITE` (`lax` \| `strict` \| `none`; для `none` обязателен `REFRESH_COOKIE_SECURE=true`). Для SPA на **другом origin** нужны `fetch`/`axios` с `credentials: 'include'` и CORS с конкретным `Access-Control-Allow-Origin` и `Access-Control-Allow-Credentials: true`.
+### Disabling Registration
 
-Дальше для `/v1/storage/*` нужен заголовок:
-
-`Authorization: Bearer <access_token>`
-
-### API хранилища (только с JWT)
-
-| Метод | Путь | Описание |
-|--------|------|----------|
-| `POST` | `/v1/storage/presign` | Тело: `file_name`, обязательный **`content_type`** (MIME, 1–128 символов), `encrypted_file_key`, `file_iv`. Ответ: `upload_url`, `blob_id`, **`content_type`**, `instructions`. Клиент делает **PUT** на `upload_url` с заголовком `Content-Type`, совпадающим с ответом. |
-| `GET` | `/v1/storage/blobs` | Список файлов **текущего пользователя** (включая `content_type` на элемент). |
-| `POST` | `/v1/storage/blobs/{blob_id}/presign-get` | Временная ссылка на скачивание; в JSON также **`content_type`** для клиента. |
-| `DELETE` | `/v1/storage/blobs/{blob_id}` | Удаление объекта и метаданных (**только свой** blob). **404**, если чужой или нет записи. |
-
-Переменные MinIO: `MINIO_USE_SSL`, `MINIO_REGION`, `MINIO_PRESIGN_TTL` (например `1h`).
-
-Пример MinIO в Docker:
+After creating your accounts:
 
 ```bash
-docker run -p 9000:9000 -p 9001:9001 \
-  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-  quay.io/minio/minio server /data --console-address ":9001"
+# In cloud-backend/.env
+REGISTRATION_ENABLED=false
 ```
 
-Создайте bucket `blobs` (или имя из `MINIO_BUCKET`) в консоли `http://127.0.0.1:9001`, либо включите `DB_INIT=true` — приложение создаст bucket при старте, если его ещё нет.
+Then restart: `docker compose up -d`
 
-## Миграции
+### Health Check
 
-По одной паре файлов на таблицу (порядок важен из‑за FK):
+```
+GET /v1/health  →  {"status":"ok"}
+```
 
-| Версия | Файлы | Таблица |
-|--------|--------|---------|
-| `1` | `000001_users.*` | `users` |
-| `2` | `000002_stored_blobs.*` | `stored_blobs` |
-| `3` | `000003_refresh_sessions.*` | `refresh_sessions` |
-| `4` | `000004_add_constraints.*` | ограничения и индексы |
-| `5` | `000005_blob_content_type.*` | колонка `stored_blobs.content_type` (NOT NULL) |
-
-Если база уже создавалась **другой** историей миграций, пересоздайте volume Postgres или очистите БД, иначе `migrate` может конфликтовать с `schema_migrations`.
-
-## Архитектура и лучшие практики
-
-- Чистая архитектура:
-  - `internal/usecase` — ядро бизнес-логики, независимая от HTTP/DB/MinIO.
-  - `internal/repo` — адаптеры для PostgreSQL и MinIO, реализующие интерфейсы usecase.
-  - `internal/controller` — REST-представление (декод, валидация, код статуса).
-  - `cmd/app/main.go` + `internal/app` — точка входа и композиция зависимостей.
-- Изоляция слоёв упрощает тестирование и отказ от глобального состояния.
-- Время жизни запросов ограничено (context с таймаутом в usecase) для устойчивости под нагрузкой.
-
-### Правильное проектирование БД
-
-- `users.email` уникален, `password_hash` хранится безопасно (bcrypt).
-- `refresh_sessions`:
-  - референс на `users(id)` с `ON DELETE CASCADE`.
-  - `refresh_token_hash` уникален среди активных сессий (`WHERE revoked_at IS NULL`).
-  - `expires_at` и `revoked_at` позволяют реализовать ротацию и отзыв.
-- `stored_blobs`:
-  - `user_id` + `id` используется для авторизации доступа «только свои файлы».
-  - `object_key` выбрано по шаблону `blobs/<user_id>/<blob_id>`.
-
-## Сборка
+### Updating
 
 ```bash
-go build -o bin/app ./cmd/app
+# Backend
+cd cloud-backend
+git pull
+docker compose up -d --build
+
+# Frontend
+cd cloud-frontend
+git pull
+docker compose up -d --build
 ```
+
+Migrations run automatically on startup.
+
+### Backup
+
+```bash
+cd cloud-backend
+./backup.sh           # saves to ./backups/
+./backup.sh /mnt/nas  # or specify a custom path
+```
+
+This creates two timestamped files:
+- `db_YYYYMMDD_HHMMSS.sql.gz` — PostgreSQL dump
+- `minio_YYYYMMDD_HHMMSS.tar.gz` — file storage
+
+### Limits
+
+Set in `cloud-backend/.env`:
+
+```bash
+# 2 GB per file
+MAX_UPLOAD_BYTES=2147483648
+
+# 50 GB per user
+STORAGE_QUOTA_BYTES=53687091200
+```
+
+Errors returned: `413 Request Entity Too Large` for file limit, `402 Payment Required` for quota.
+
+---
+
+## Architecture Overview
+
+Files are encrypted client-side (AES-256-GCM) before upload. The server stores only ciphertext; encryption keys are derived from the user's password via SRP and never leave the browser.
+
+```
+Browser → nginx/Caddy → Backend API → PostgreSQL (metadata)
+                      ↘ MinIO (encrypted blobs, via presigned URLs)
+```
+
+### Backend Structure
+
+| Path | Purpose |
+|---|---|
+| `cmd/app/main.go` | Entry point |
+| `config/` | Environment-based config (twelve-factor) |
+| `internal/app/` | Dependency wiring |
+| `internal/controller/restapi/v1/` | HTTP handlers |
+| `internal/usecase/` | Business logic (auth, storage, sharing) |
+| `internal/repo/` | PostgreSQL and MinIO adapters |
+| `migrations/` | SQL migrations (auto-applied on start) |
+
+### API
+
+Auth: `POST /v1/auth/register`, `/v1/auth/login/init`, `/v1/auth/login/finalize`, `/v1/auth/refresh`, `/v1/auth/logout`
+
+Storage (requires `Authorization: Bearer <token>`):
+- `POST /v1/storage/presign` — get upload URL
+- `GET /v1/storage/blobs` — list files
+- `POST /v1/storage/blobs/{id}/presign-get` — get download URL
+- `DELETE /v1/storage/blobs/{id}` — move to trash
+- `GET /v1/trash/` — list trash
+- `POST /v1/trash/blobs/{id}/restore` — restore from trash
+
+### Database
+
+| Migration | Table |
+|---|---|
+| 1 | `users` |
+| 2 | `stored_blobs` |
+| 3 | `refresh_sessions` |
+| 4 | Constraints and indexes |
+| 5 | `stored_blobs.content_type` |
+| 6 | `folders` |
+| 7 | `file_shares` |
+| 8+ | Trash, search, sharing |

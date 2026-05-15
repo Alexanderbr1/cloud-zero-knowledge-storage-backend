@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"net/http"
@@ -16,6 +17,15 @@ import (
 	"cloud-backend/internal/entity"
 	sharinguc "cloud-backend/internal/usecase/sharing"
 )
+
+type SharingService interface {
+	GetRecipientPublicKey(ctx context.Context, email string) ([]byte, error)
+	CreateShare(ctx context.Context, p sharinguc.CreateShareParams) (entity.FileShareView, error)
+	ListSharedWithMe(ctx context.Context, recipientID uuid.UUID) ([]entity.FileShareView, error)
+	ListMyShares(ctx context.Context, blobID, ownerID uuid.UUID) ([]entity.FileShareView, error)
+	GetSharedFile(ctx context.Context, shareID, callerID uuid.UUID) (sharinguc.SharedFileResult, error)
+	RevokeShare(ctx context.Context, shareID, ownerID uuid.UUID) error
+}
 
 const (
 	// P-256 SPKI public key is always exactly 91 bytes.
@@ -164,8 +174,8 @@ func getSharedFile(d Deps) http.HandlerFunc {
 			writeSharingErr(w, err, d.Logger)
 			return
 		}
-		restapi.WriteJSON(w, http.StatusOK,
-			shareToDTO(result.Share, result.DownloadURL, base64.StdEncoding.EncodeToString(result.FileIV)))
+		fileIVB64 := base64.StdEncoding.EncodeToString(result.FileIV)
+		restapi.WriteJSON(w, http.StatusOK, shareToDTO(result.Share, result.DownloadURL, fileIVB64))
 	}
 }
 

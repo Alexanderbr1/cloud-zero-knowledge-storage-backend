@@ -14,24 +14,6 @@ import (
 	"cloud-backend/internal/entity"
 )
 
-// TrashResult contains the items currently in a user's recycle bin.
-type TrashResult struct {
-	Blobs   []entity.Blob
-	Folders []entity.Folder
-}
-
-const dbTimeout = 10 * time.Second
-
-type Service struct {
-	Objects ObjectStore
-	Blobs   BlobRegistry
-	Folders FolderRegistry
-
-	PresignTTL time.Duration
-}
-
-// ─── Object store ─────────────────────────────────────────────────────────────
-
 type ObjectStore interface {
 	EnsureBucket(ctx context.Context) error
 	PresignedPutObject(ctx context.Context, objectKey string, expiry time.Duration) (*url.URL, error)
@@ -39,9 +21,8 @@ type ObjectStore interface {
 	RemoveObject(ctx context.Context, objectKey string) error
 }
 
-// ─── Blob registry ────────────────────────────────────────────────────────────
-
-type BlobRegistry interface {
+type BlobRepo interface {
+	GetUserStorageUsed(ctx context.Context, userID uuid.UUID) (int64, error)
 	RegisterBlob(ctx context.Context, p RegisterBlobParams) error
 	GetBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (BlobMeta, bool, error)
 	RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error)
@@ -50,9 +31,10 @@ type BlobRegistry interface {
 	MoveBlob(ctx context.Context, blobID, userID uuid.UUID, folderID *uuid.UUID) (bool, error)
 	RenameBlob(ctx context.Context, blobID, userID uuid.UUID, name string) (bool, error)
 	SearchBlobs(ctx context.Context, userID uuid.UUID, query string) ([]SearchBlobRecord, error)
-
-	// Trash
 	TrashBlob(ctx context.Context, blobID, userID uuid.UUID) (bool, error)
+}
+
+type BlobTrashRepo interface {
 	RestoreBlob(ctx context.Context, blobID, userID uuid.UUID) (bool, error)
 	HardDeleteBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error)
 	ListTrashedBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
@@ -60,47 +42,18 @@ type BlobRegistry interface {
 	PurgeExpiredBlobs(ctx context.Context, before time.Time) ([]string, error)
 }
 
-// SearchBlobRecord extends Blob with the folder name for display in search results.
-type SearchBlobRecord struct {
-	entity.Blob
-	FolderName *string
-}
-
-type RegisterBlobParams struct {
-	ID               uuid.UUID
-	UserID           uuid.UUID
-	FileName         string
-	ContentType      string
-	ObjectKey        string
-	FileSize         int64
-	EncryptedFileKey []byte
-	FileIV           []byte
-	FolderID         *uuid.UUID
-}
-
-type BlobMeta struct {
-	ObjectKey        string
-	ContentType      string
-	EncryptedFileKey []byte
-	FileIV           []byte
-}
-
-// ─── Folder registry ──────────────────────────────────────────────────────────
-
-type FolderRegistry interface {
+type FolderRepo interface {
 	CreateFolder(ctx context.Context, p CreateFolderParams) (entity.Folder, error)
 	GetFolder(ctx context.Context, folderID, userID uuid.UUID) (entity.Folder, bool, error)
 	ListFolders(ctx context.Context, userID uuid.UUID, parentID *uuid.UUID) ([]entity.Folder, error)
 	RenameFolder(ctx context.Context, folderID, userID uuid.UUID, name string) (entity.Folder, error)
 	MoveFolder(ctx context.Context, p MoveFolderParams) error
-	// DeleteFolder atomically checks that the folder is empty and soft-deletes it (moves to trash).
-	// Returns ErrFolderNotEmpty if it has children, ErrFolderNotFound if absent/not owned.
-	DeleteFolder(ctx context.Context, folderID, userID uuid.UUID) error
 	IsDescendantOf(ctx context.Context, ancestorID, candidateID uuid.UUID) (bool, error)
 	SearchFolders(ctx context.Context, userID uuid.UUID, query string) ([]entity.Folder, error)
-
-	// Trash
 	TrashFolder(ctx context.Context, folderID, userID uuid.UUID) (bool, error)
+}
+
+type FolderTrashRepo interface {
 	RestoreFolder(ctx context.Context, folderID, userID uuid.UUID) (bool, error)
 	HardDeleteFolder(ctx context.Context, folderID, userID uuid.UUID) (objectKeys []string, ok bool, err error)
 	ListTrashedFolders(ctx context.Context, userID uuid.UUID) ([]entity.Folder, error)
@@ -108,61 +61,42 @@ type FolderRegistry interface {
 	PurgeExpiredFolders(ctx context.Context, before time.Time) ([]string, error)
 }
 
-type CreateFolderParams struct {
-	UserID   uuid.UUID
-	ParentID *uuid.UUID
-	Name     string
+const dbTimeout = 10 * time.Second
+
+type Service struct {
+	Objects     ObjectStore
+	Blobs       BlobRepo
+	BlobTrash   BlobTrashRepo
+	Folders     FolderRepo
+	FolderTrash FolderTrashRepo
+
+	PresignTTL     time.Duration
+	MaxUploadBytes int64 // 0 = unlimited
+	QuotaBytes     int64 // 0 = unlimited
 }
 
-type MoveFolderParams struct {
-	FolderID    uuid.UUID
-	UserID      uuid.UUID
-	NewParentID *uuid.UUID
-}
-
-// ─── PresignPut / PresignGet result types ────────────────────────────────────
-
-type PresignPutParams struct {
-	UserID           uuid.UUID
-	FileName         string
-	ContentType      string
-	FileSize         int64
-	EncryptedFileKey []byte
-	FileIV           []byte
-	FolderID         *uuid.UUID
-}
-
-type PresignPutResult struct {
-	BlobID      uuid.UUID
-	ObjectKey   string
-	UploadURL   string
-	ExpiresIn   int64
-	HTTPMethod  string
-	ContentType string
-}
-
-type PresignGetResult struct {
-	BlobID           uuid.UUID
-	ObjectKey        string
-	DownloadURL      string
-	ExpiresIn        int64
-	HTTPMethod       string
-	ContentType      string
-	EncryptedFileKey []byte
-	FileIV           []byte
-}
-
-// ─── Blob methods ─────────────────────────────────────────────────────────────
-
-// PresignPut: object key format — blobs/<user_id>/<blob_id>.
 func (s *Service) PresignPut(ctx context.Context, p PresignPutParams) (*PresignPutResult, error) {
 	p.ContentType = strings.TrimSpace(p.ContentType)
 	blobID := uuid.New()
 	cleanName := sanitizeFileName(p.FileName)
 	objectKey := fmt.Sprintf("blobs/%s/%s", p.UserID, blobID)
 
+	if s.MaxUploadBytes > 0 && p.FileSize > s.MaxUploadBytes {
+		return nil, ErrFileTooLarge
+	}
+
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
+
+	if s.QuotaBytes > 0 {
+		used, err := s.Blobs.GetUserStorageUsed(dbCtx, p.UserID)
+		if err != nil {
+			return nil, fmt.Errorf("get storage used: %w", err)
+		}
+		if used+p.FileSize > s.QuotaBytes {
+			return nil, ErrQuotaExceeded
+		}
+	}
 
 	if p.FolderID != nil {
 		if err := s.requireFolder(dbCtx, *p.FolderID, p.UserID); err != nil {
@@ -171,9 +105,15 @@ func (s *Service) PresignPut(ctx context.Context, p PresignPutParams) (*PresignP
 	}
 
 	if err := s.Blobs.RegisterBlob(dbCtx, RegisterBlobParams{
-		ID: blobID, UserID: p.UserID, FileName: cleanName, ContentType: p.ContentType,
-		ObjectKey: objectKey, FileSize: p.FileSize, EncryptedFileKey: p.EncryptedFileKey,
-		FileIV: p.FileIV, FolderID: p.FolderID,
+		ID:               blobID,
+		UserID:           p.UserID,
+		FileName:         cleanName,
+		ContentType:      p.ContentType,
+		ObjectKey:        objectKey,
+		FileSize:         p.FileSize,
+		EncryptedFileKey: p.EncryptedFileKey,
+		FileIV:           p.FileIV,
+		FolderID:         p.FolderID,
 	}); err != nil {
 		return nil, fmt.Errorf("register blob: %w", err)
 	}
@@ -222,7 +162,6 @@ func (s *Service) PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*Pr
 	}, nil
 }
 
-// DeleteBlob moves a blob to the recycle bin (soft delete).
 func (s *Service) DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
@@ -237,15 +176,11 @@ func (s *Service) DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) erro
 	return nil
 }
 
-func (s *Service) TrashBlob(ctx context.Context, userID, blobID uuid.UUID) error {
-	return s.DeleteBlob(ctx, userID, blobID)
-}
-
 func (s *Service) RestoreBlob(ctx context.Context, userID, blobID uuid.UUID) error {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	ok, err := s.Blobs.RestoreBlob(dbCtx, blobID, userID)
+	ok, err := s.BlobTrash.RestoreBlob(dbCtx, blobID, userID)
 	if err != nil {
 		return fmt.Errorf("restore blob: %w", err)
 	}
@@ -259,7 +194,7 @@ func (s *Service) HardDeleteBlob(ctx context.Context, userID, blobID uuid.UUID) 
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	objectKey, ok, err := s.Blobs.HardDeleteBlob(dbCtx, blobID, userID)
+	objectKey, ok, err := s.BlobTrash.HardDeleteBlob(dbCtx, blobID, userID)
 	if err != nil {
 		return fmt.Errorf("hard delete blob record: %w", err)
 	}
@@ -335,8 +270,6 @@ func (s *Service) RenameBlob(ctx context.Context, userID, blobID uuid.UUID, name
 	}
 	return nil
 }
-
-// ─── Folder methods ───────────────────────────────────────────────────────────
 
 func (s *Service) CreateFolder(ctx context.Context, p CreateFolderParams) (entity.Folder, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
@@ -418,7 +351,6 @@ func (s *Service) MoveFolder(ctx context.Context, p MoveFolderParams) error {
 			return ErrFolderNotFound
 		}
 
-		// Prevent cycle: new parent must not be a descendant of the folder being moved.
 		isDesc, err := s.Folders.IsDescendantOf(dbCtx, p.FolderID, *p.NewParentID)
 		if err != nil {
 			return fmt.Errorf("cycle check: %w", err)
@@ -434,7 +366,6 @@ func (s *Service) MoveFolder(ctx context.Context, p MoveFolderParams) error {
 	return nil
 }
 
-// DeleteFolder moves a folder (and its entire subtree) to the recycle bin.
 func (s *Service) DeleteFolder(ctx context.Context, userID, folderID uuid.UUID) error {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
@@ -449,15 +380,11 @@ func (s *Service) DeleteFolder(ctx context.Context, userID, folderID uuid.UUID) 
 	return nil
 }
 
-func (s *Service) TrashFolder(ctx context.Context, userID, folderID uuid.UUID) error {
-	return s.DeleteFolder(ctx, userID, folderID)
-}
-
 func (s *Service) RestoreFolder(ctx context.Context, userID, folderID uuid.UUID) error {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	ok, err := s.Folders.RestoreFolder(dbCtx, folderID, userID)
+	ok, err := s.FolderTrash.RestoreFolder(dbCtx, folderID, userID)
 	if err != nil {
 		return fmt.Errorf("restore folder: %w", err)
 	}
@@ -471,7 +398,7 @@ func (s *Service) HardDeleteFolder(ctx context.Context, userID, folderID uuid.UU
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	objectKeys, ok, err := s.Folders.HardDeleteFolder(dbCtx, folderID, userID)
+	objectKeys, ok, err := s.FolderTrash.HardDeleteFolder(dbCtx, folderID, userID)
 	if err != nil {
 		return fmt.Errorf("hard delete folder: %w", err)
 	}
@@ -480,8 +407,7 @@ func (s *Service) HardDeleteFolder(ctx context.Context, userID, folderID uuid.UU
 	}
 
 	for _, key := range objectKeys {
-		// best-effort: log but don't fail if MinIO cleanup errors
-		_ = s.Objects.RemoveObject(ctx, key)
+		_ = s.Objects.RemoveObject(ctx, key) // best-effort
 	}
 	return nil
 }
@@ -496,7 +422,7 @@ func (s *Service) ListTrash(ctx context.Context, userID uuid.UUID) (TrashResult,
 
 	g.Go(func() error {
 		var err error
-		blobs, err = s.Blobs.ListTrashedBlobs(gctx, userID)
+		blobs, err = s.BlobTrash.ListTrashedBlobs(gctx, userID)
 		if err != nil {
 			return fmt.Errorf("list trashed blobs: %w", err)
 		}
@@ -504,7 +430,7 @@ func (s *Service) ListTrash(ctx context.Context, userID uuid.UUID) (TrashResult,
 	})
 	g.Go(func() error {
 		var err error
-		folders, err = s.Folders.ListTrashedFolders(gctx, userID)
+		folders, err = s.FolderTrash.ListTrashedFolders(gctx, userID)
 		if err != nil {
 			return fmt.Errorf("list trashed folders: %w", err)
 		}
@@ -521,12 +447,12 @@ func (s *Service) EmptyTrash(ctx context.Context, userID uuid.UUID) error {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	blobKeys, err := s.Blobs.EmptyTrashedBlobs(dbCtx, userID)
+	blobKeys, err := s.BlobTrash.EmptyTrashedBlobs(dbCtx, userID)
 	if err != nil {
 		return fmt.Errorf("empty trashed blobs: %w", err)
 	}
 
-	folderBlobKeys, err := s.Folders.EmptyTrashedFolders(dbCtx, userID)
+	folderBlobKeys, err := s.FolderTrash.EmptyTrashedFolders(dbCtx, userID)
 	if err != nil {
 		return fmt.Errorf("empty trashed folders: %w", err)
 	}
@@ -537,16 +463,15 @@ func (s *Service) EmptyTrash(ctx context.Context, userID uuid.UUID) error {
 	return nil
 }
 
-// CleanExpiredTrash permanently deletes items that have been in the trash for longer than ttl.
 func (s *Service) CleanExpiredTrash(ctx context.Context, ttl time.Duration) error {
 	before := time.Now().Add(-ttl)
 
-	blobKeys, err := s.Blobs.PurgeExpiredBlobs(ctx, before)
+	blobKeys, err := s.BlobTrash.PurgeExpiredBlobs(ctx, before)
 	if err != nil {
 		return fmt.Errorf("purge expired blobs: %w", err)
 	}
 
-	folderBlobKeys, err := s.Folders.PurgeExpiredFolders(ctx, before)
+	folderBlobKeys, err := s.FolderTrash.PurgeExpiredFolders(ctx, before)
 	if err != nil {
 		return fmt.Errorf("purge expired folders: %w", err)
 	}
@@ -555,18 +480,6 @@ func (s *Service) CleanExpiredTrash(ctx context.Context, ttl time.Duration) erro
 		_ = s.Objects.RemoveObject(ctx, key)
 	}
 	return nil
-}
-
-// ─── Search ───────────────────────────────────────────────────────────────────
-
-type SearchParams struct {
-	UserID uuid.UUID
-	Query  string
-}
-
-type SearchResult struct {
-	Blobs   []SearchBlobRecord
-	Folders []entity.Folder
 }
 
 func (s *Service) Search(ctx context.Context, p SearchParams) (SearchResult, error) {
@@ -600,8 +513,6 @@ func (s *Service) Search(ctx context.Context, p SearchParams) (SearchResult, err
 	return SearchResult{Blobs: blobs, Folders: folders}, nil
 }
 
-// ─── Private helpers ──────────────────────────────────────────────────────────
-
 func (s *Service) requireFolder(ctx context.Context, folderID, userID uuid.UUID) error {
 	_, ok, err := s.Folders.GetFolder(ctx, folderID, userID)
 	if err != nil {
@@ -612,8 +523,6 @@ func (s *Service) requireFolder(ctx context.Context, folderID, userID uuid.UUID)
 	}
 	return nil
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 func sanitizeFileName(name string) string {
 	name = strings.TrimSpace(name)

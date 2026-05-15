@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"context"
 	"encoding/base64"
 	"net/http"
 
@@ -13,13 +14,22 @@ import (
 	storageuc "cloud-backend/internal/usecase/storage"
 )
 
+type TrashService interface {
+	ListTrash(ctx context.Context, userID uuid.UUID) (storageuc.TrashResult, error)
+	RestoreBlob(ctx context.Context, userID, blobID uuid.UUID) error
+	HardDeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error
+	RestoreFolder(ctx context.Context, userID, folderID uuid.UUID) error
+	HardDeleteFolder(ctx context.Context, userID, folderID uuid.UUID) error
+	EmptyTrash(ctx context.Context, userID uuid.UUID) error
+}
+
 func trashList(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		uid, ok := restapi.MustUserID(w, r)
 		if !ok {
 			return
 		}
-		result, err := d.Storage.ListTrash(r.Context(), uid)
+		result, err := d.Trash.ListTrash(r.Context(), uid)
 		if err != nil {
 			restapi.WriteInternalError(w, d.Logger, err)
 			return
@@ -39,7 +49,7 @@ func trashRestoreBlob(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid blob_id")
 			return
 		}
-		if err := d.Storage.RestoreBlob(r.Context(), uid, blobID); err != nil {
+		if err := d.Trash.RestoreBlob(r.Context(), uid, blobID); err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
@@ -58,7 +68,7 @@ func trashDeleteBlob(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid blob_id")
 			return
 		}
-		if err := d.Storage.HardDeleteBlob(r.Context(), uid, blobID); err != nil {
+		if err := d.Trash.HardDeleteBlob(r.Context(), uid, blobID); err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
@@ -77,7 +87,7 @@ func trashRestoreFolder(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid folder_id")
 			return
 		}
-		if err := d.Storage.RestoreFolder(r.Context(), uid, folderID); err != nil {
+		if err := d.Trash.RestoreFolder(r.Context(), uid, folderID); err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
@@ -96,7 +106,7 @@ func trashDeleteFolder(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid folder_id")
 			return
 		}
-		if err := d.Storage.HardDeleteFolder(r.Context(), uid, folderID); err != nil {
+		if err := d.Trash.HardDeleteFolder(r.Context(), uid, folderID); err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
@@ -110,15 +120,13 @@ func trashEmpty(d Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		if err := d.Storage.EmptyTrash(r.Context(), uid); err != nil {
+		if err := d.Trash.EmptyTrash(r.Context(), uid); err != nil {
 			restapi.WriteInternalError(w, d.Logger, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
-
-// ─── helpers ─────────────────────────────────────────────────────────────────
 
 func trashResultToDTO(r storageuc.TrashResult) dto.TrashListResponse {
 	blobs := make([]dto.TrashBlobItem, 0, len(r.Blobs))

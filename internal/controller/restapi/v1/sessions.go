@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -13,6 +14,12 @@ import (
 	authuc "cloud-backend/internal/usecase/auth"
 )
 
+type SessionsService interface {
+	ListDeviceSessions(ctx context.Context, userID uuid.UUID) ([]entity.DeviceSession, error)
+	RevokeDeviceSession(ctx context.Context, userID, sessionID uuid.UUID) error
+	RevokeOtherDeviceSessions(ctx context.Context, userID, currentSessionID uuid.UUID) error
+}
+
 func listSessions(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := restapi.MustUserID(w, r)
@@ -21,13 +28,13 @@ func listSessions(d Deps) http.HandlerFunc {
 		}
 		currentSessionID := restapi.SessionIDFromContext(r.Context())
 
-		sessions, err := d.Auth.ListDeviceSessions(r.Context(), userID)
+		sessions, err := d.DeviceSessions.ListDeviceSessions(r.Context(), userID)
 		if err != nil {
 			restapi.WriteInternalError(w, d.Logger, err)
 			return
 		}
 
-		out := make([]dto.DeviceSessionDTO, 0, len(sessions))
+		out := make([]dto.DeviceSession, 0, len(sessions))
 		for _, s := range sessions {
 			out = append(out, sessionToDTO(s, currentSessionID))
 		}
@@ -48,7 +55,7 @@ func revokeSession(d Deps) http.HandlerFunc {
 			return
 		}
 
-		if err := d.Auth.RevokeDeviceSession(r.Context(), userID, sessionID); err != nil {
+		if err := d.DeviceSessions.RevokeDeviceSession(r.Context(), userID, sessionID); err != nil {
 			if errors.Is(err, authuc.ErrSessionNotFound) {
 				restapi.WriteError(w, http.StatusNotFound, "session not found")
 				return
@@ -68,7 +75,7 @@ func revokeOtherSessions(d Deps) http.HandlerFunc {
 		}
 		currentSessionID := restapi.SessionIDFromContext(r.Context())
 
-		if err := d.Auth.RevokeOtherDeviceSessions(r.Context(), userID, currentSessionID); err != nil {
+		if err := d.DeviceSessions.RevokeOtherDeviceSessions(r.Context(), userID, currentSessionID); err != nil {
 			restapi.WriteInternalError(w, d.Logger, err)
 			return
 		}
@@ -76,8 +83,8 @@ func revokeOtherSessions(d Deps) http.HandlerFunc {
 	}
 }
 
-func sessionToDTO(s entity.DeviceSession, currentID uuid.UUID) dto.DeviceSessionDTO {
-	return dto.DeviceSessionDTO{
+func sessionToDTO(s entity.DeviceSession, currentID uuid.UUID) dto.DeviceSession {
+	return dto.DeviceSession{
 		ID:           s.ID,
 		DeviceName:   s.DeviceName,
 		IPAddress:    s.IPAddress,

@@ -6,7 +6,7 @@ import (
 	"github.com/google/uuid"
 )
 
-type DeviceSessionDTO struct {
+type DeviceSession struct {
 	ID           uuid.UUID `json:"id"`
 	DeviceName   string    `json:"device_name"`
 	IPAddress    string    `json:"ip_address"`
@@ -17,5 +17,5 @@ type DeviceSessionDTO struct {
 }
 
 type ListSessionsResponse struct {
-	Sessions []DeviceSessionDTO `json:"sessions"`
+	Sessions []DeviceSession `json:"sessions"`
 }

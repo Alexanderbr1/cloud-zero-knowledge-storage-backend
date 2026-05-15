@@ -2,18 +2,16 @@ package dto
 
 import "time"
 
-// ─── Blobs ────────────────────────────────────────────────────────────────────
-
-type StoragePresignPutRequest struct {
+type PresignPutRequest struct {
 	FileName         string  `json:"file_name"          validate:"required,max=512"`
 	ContentType      string  `json:"content_type"       validate:"required,min=1,max=128"`
-	EncryptedFileKey string  `json:"encrypted_file_key" validate:"required"`
-	FileIV           string  `json:"file_iv"            validate:"required"`
+	EncryptedFileKey string  `json:"encrypted_file_key" validate:"required"` // base64
+	FileIV           string  `json:"file_iv"            validate:"required"` // base64
 	FolderID         *string `json:"folder_id"`
 	FileSize         int64   `json:"file_size"`
 }
 
-type StoragePresignPutResponse struct {
+type PresignPutResponse struct {
 	BlobID      string `json:"blob_id"`
 	UploadURL   string `json:"upload_url"`
 	ExpiresIn   int64  `json:"expires_in"`
@@ -21,46 +19,43 @@ type StoragePresignPutResponse struct {
 	ContentType string `json:"content_type"`
 }
 
-type StoragePresignGetResponse struct {
+type PresignGetResponse struct {
 	BlobID           string `json:"blob_id"`
 	DownloadURL      string `json:"download_url"`
 	ExpiresIn        int64  `json:"expires_in"`
 	HTTPMethod       string `json:"http_method"`
 	ContentType      string `json:"content_type"`
-	EncryptedFileKey string `json:"encrypted_file_key"`
-	FileIV           string `json:"file_iv"`
+	EncryptedFileKey string `json:"encrypted_file_key"` // base64
+	FileIV           string `json:"file_iv"`            // base64
 }
 
-type StorageBlobItem struct {
+type BlobItem struct {
 	BlobID           string    `json:"blob_id"`
-	FolderID         *string   `json:"folder_id"` // null = root level
+	FolderID         *string   `json:"folder_id"` // null = root
 	FileName         string    `json:"file_name"`
 	ContentType      string    `json:"content_type"`
 	FileSize         int64     `json:"file_size"`
 	CreatedAt        time.Time `json:"created_at"`
-	EncryptedFileKey string    `json:"encrypted_file_key"`
-	FileIV           string    `json:"file_iv"`
+	EncryptedFileKey string    `json:"encrypted_file_key"` // base64
+	FileIV           string    `json:"file_iv"`            // base64
 }
 
-type StorageListBlobsResponse struct {
-	Items []StorageBlobItem `json:"items"`
+type ListBlobsResponse struct {
+	Items []BlobItem `json:"items"`
 }
 
 type MoveBlobRequest struct {
-	FolderID *string `json:"folder_id"` // null/absent = move to root
+	FolderID *string `json:"folder_id"` // null = move to root
 }
 
 type RenameBlobRequest struct {
 	Name string `json:"name" validate:"required,min=1,max=512"`
 }
 
-// ─── Folders ──────────────────────────────────────────────────────────────────
-
 type FolderItem struct {
 	FolderID  string    `json:"folder_id"`
-	ParentID  *string   `json:"parent_id"` // null = root level
+	ParentID  *string   `json:"parent_id"` // null = root
 	Name      string    `json:"name"`
-	TotalSize int64     `json:"total_size"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -72,8 +67,8 @@ type SearchBlobItem struct {
 	ContentType      string    `json:"content_type"`
 	FileSize         int64     `json:"file_size"`
 	CreatedAt        time.Time `json:"created_at"`
-	EncryptedFileKey string    `json:"encrypted_file_key"`
-	FileIV           string    `json:"file_iv"`
+	EncryptedFileKey string    `json:"encrypted_file_key"` // base64
+	FileIV           string    `json:"file_iv"`            // base64
 }
 
 type SearchResponse struct {
@@ -95,10 +90,8 @@ type RenameFolderRequest struct {
 }
 
 type MoveFolderRequest struct {
-	ParentID *string `json:"parent_id"` // null/absent = move to root
+	ParentID *string `json:"parent_id"` // null = move to root
 }
-
-// ─── Trash ────────────────────────────────────────────────────────────────────
 
 type TrashBlobItem struct {
 	BlobID           string    `json:"blob_id"`
@@ -107,8 +100,8 @@ type TrashBlobItem struct {
 	ContentType      string    `json:"content_type"`
 	FileSize         int64     `json:"file_size"`
 	CreatedAt        time.Time `json:"created_at"`
-	EncryptedFileKey string    `json:"encrypted_file_key"`
-	FileIV           string    `json:"file_iv"`
+	EncryptedFileKey string    `json:"encrypted_file_key"` // base64
+	FileIV           string    `json:"file_iv"`            // base64
 }
 
 type TrashFolderItem struct {

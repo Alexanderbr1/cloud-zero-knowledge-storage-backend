@@ -6,7 +6,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// FileShare — record of a file shared from one user to another.
 // The file key is re-wrapped using ECIES so only the recipient can recover it.
 type FileShare struct {
 	ID             uuid.UUID

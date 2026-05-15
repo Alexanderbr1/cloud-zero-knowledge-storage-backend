@@ -17,60 +17,6 @@ import (
 	srppkg "cloud-backend/pkg/srp"
 )
 
-const dbTimeout = 5 * time.Second
-
-func dbCtx(parent context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(parent, dbTimeout)
-}
-
-// ─── Параметры сервиса ────────────────────────────────────────────────────
-
-type RegisterParams struct {
-	Email               string
-	SRPSalt             string
-	SRPVerifier         string
-	BcryptSalt          string
-	CryptoSalt          []byte
-	PublicKey           []byte
-	EncryptedPrivateKey []byte
-	Device              DeviceInfo
-}
-
-type LoginFinalizeParams struct {
-	SessionID string
-	M1        string
-	Device    DeviceInfo
-}
-
-// ─── Параметры репозиториев ───────────────────────────────────────────────
-
-type NewUserParams struct {
-	ID                  uuid.UUID
-	Email               string
-	SRPSalt             string
-	SRPVerifier         string
-	BcryptSalt          string
-	CryptoSalt          []byte
-	PublicKey           []byte
-	EncryptedPrivateKey []byte
-}
-
-type RefreshSessionParams struct {
-	SessionID       uuid.UUID
-	UserID          uuid.UUID
-	DeviceSessionID uuid.UUID
-	TokenHash       []byte
-	ExpiresAt       time.Time
-}
-
-type ConsumedSession struct {
-	SessionID       uuid.UUID
-	UserID          uuid.UUID
-	DeviceSessionID uuid.UUID
-}
-
-// ─── Репозитории ──────────────────────────────────────────────────────────
-
 type UserRepository interface {
 	CreateUser(ctx context.Context, p NewUserParams) error
 	GetByEmail(ctx context.Context, email string) (entity.User, bool, error)
@@ -79,7 +25,6 @@ type UserRepository interface {
 type SessionRepository interface {
 	CreateRefreshSession(ctx context.Context, p RefreshSessionParams) error
 	ConsumeRefreshSession(ctx context.Context, tokenHash []byte) (ConsumedSession, bool, error)
-	ConsumeAndGetSession(ctx context.Context, tokenHash []byte) (userID, deviceSessionID uuid.UUID, err error)
 }
 
 type DeviceSessionRepository interface {
@@ -87,8 +32,7 @@ type DeviceSessionRepository interface {
 	UpdateLastActive(ctx context.Context, id uuid.UUID) error
 	ListActiveSessions(ctx context.Context, userID uuid.UUID) ([]entity.DeviceSession, error)
 	RevokeSession(ctx context.Context, id, userID uuid.UUID) error
-	// RevokeOtherSessions revokes all sessions except exceptID and returns their IDs
-	// so the caller can add them to the blocklist.
+	// returns IDs so the caller can add them to the blocklist.
 	RevokeOtherSessions(ctx context.Context, userID, exceptID uuid.UUID) ([]uuid.UUID, error)
 	RevokeOrphanedSessions(ctx context.Context) error
 	RevokeUserOrphanedSessions(ctx context.Context, userID uuid.UUID) error
@@ -105,14 +49,17 @@ type TokenIssuer interface {
 	IssueAccess(userID, deviceSessionID uuid.UUID) (token string, expiresInSec int64, err error)
 }
 
-// Notifier sends email notifications for auth events.
-// Implementations must be safe for concurrent use and should return quickly
-// (the caller fires notifications in a goroutine).
+// Implementations must be safe for concurrent use and return quickly;
+// the caller fires notifications in a goroutine.
 type Notifier interface {
 	NotifyNewLogin(ctx context.Context, toEmail, deviceName, ipAddress string) error
 }
 
-// ─── Сервис ───────────────────────────────────────────────────────────────
+const dbTimeout = 5 * time.Second
+
+func dbCtx(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, dbTimeout)
+}
 
 type Service struct {
 	Users          UserRepository
@@ -127,38 +74,6 @@ type Service struct {
 	Notifier       Notifier
 }
 
-type DeviceInfo struct {
-	UserAgent  string
-	IPAddress  string
-	DeviceName string
-}
-
-// ─── Типы результатов ─────────────────────────────────────────────────────
-
-type TokenPair struct {
-	AccessToken      string
-	AccessExpiresIn  int64
-	RefreshToken     string
-	RefreshExpiresIn int64
-	DeviceSessionID  uuid.UUID
-}
-
-type LoginInitResult struct {
-	SessionID  string
-	SRPSalt    string
-	BcryptSalt string
-	B          string
-	CryptoSalt []byte
-}
-
-type LoginFinalizeResult struct {
-	M2                  string
-	Pair                TokenPair
-	EncryptedPrivateKey []byte
-}
-
-// ─── Методы аутентификации ────────────────────────────────────────────────
-
 func (s *Service) Register(ctx context.Context, p RegisterParams) (TokenPair, error) {
 	p.Email = strings.TrimSpace(strings.ToLower(p.Email))
 
@@ -167,9 +82,14 @@ func (s *Service) Register(ctx context.Context, p RegisterParams) (TokenPair, er
 	defer cancel()
 
 	if err := s.Users.CreateUser(tctx, NewUserParams{
-		ID: id, Email: p.Email, SRPSalt: p.SRPSalt, SRPVerifier: p.SRPVerifier,
-		BcryptSalt: p.BcryptSalt, CryptoSalt: p.CryptoSalt,
-		PublicKey: p.PublicKey, EncryptedPrivateKey: p.EncryptedPrivateKey,
+		ID:                  id,
+		Email:               p.Email,
+		SRPSalt:             p.SRPSalt,
+		SRPVerifier:         p.SRPVerifier,
+		BcryptSalt:          p.BcryptSalt,
+		CryptoSalt:          p.CryptoSalt,
+		PublicKey:           p.PublicKey,
+		EncryptedPrivateKey: p.EncryptedPrivateKey,
 	}); err != nil {
 		return TokenPair{}, err
 	}
@@ -255,7 +175,11 @@ func (s *Service) LoginFinalize(ctx context.Context, p LoginFinalizeParams) (Log
 		}
 	}()
 
-	return LoginFinalizeResult{M2: m2Hex, Pair: pair, EncryptedPrivateKey: entry.EncryptedPrivateKey}, nil
+	return LoginFinalizeResult{
+		M2:                  m2Hex,
+		Pair:                pair,
+		EncryptedPrivateKey: entry.EncryptedPrivateKey,
+	}, nil
 }
 
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, error) {
@@ -286,19 +210,17 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 	tctx, cancel := dbCtx(ctx)
 	defer cancel()
 
-	userID, deviceSessionID, err := s.Sessions.ConsumeAndGetSession(tctx, hash)
+	consumed, ok, err := s.Sessions.ConsumeRefreshSession(tctx, hash)
 	if err != nil {
 		return err
 	}
-	if deviceSessionID == uuid.Nil {
+	if !ok {
 		// Token not found or already revoked — treat as successful logout.
 		return nil
 	}
 
-	return s.DeviceSessions.RevokeSession(ctx, deviceSessionID, userID)
+	return s.DeviceSessions.RevokeSession(ctx, consumed.DeviceSessionID, consumed.UserID)
 }
-
-// ─── Управление устройствами ──────────────────────────────────────────────
 
 func (s *Service) ListDeviceSessions(ctx context.Context, userID uuid.UUID) ([]entity.DeviceSession, error) {
 	return s.DeviceSessions.ListActiveSessions(ctx, userID)
@@ -331,8 +253,6 @@ func (s *Service) CleanOrphanedSessions(ctx context.Context) error {
 	return s.DeviceSessions.RevokeOrphanedSessions(ctx)
 }
 
-// ─── Приватные методы ─────────────────────────────────────────────────────
-
 func (s *Service) issueTokenPair(ctx context.Context, userID uuid.UUID, device DeviceInfo) (TokenPair, error) {
 	deviceSessionID := uuid.New()
 	tctx, cancel := dbCtx(ctx)
@@ -361,8 +281,11 @@ func (s *Service) issueTokenPairForDevice(ctx context.Context, userID, deviceSes
 	defer cancel()
 
 	if err := s.Sessions.CreateRefreshSession(tctx, RefreshSessionParams{
-		SessionID: sessID, UserID: userID, DeviceSessionID: deviceSessionID,
-		TokenHash: refreshHashBytes, ExpiresAt: expiresAt,
+		SessionID:       sessID,
+		UserID:          userID,
+		DeviceSessionID: deviceSessionID,
+		TokenHash:       refreshHashBytes,
+		ExpiresAt:       expiresAt,
 	}); err != nil {
 		return TokenPair{}, err
 	}

@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -14,6 +15,16 @@ import (
 	"cloud-backend/internal/entity"
 	storageuc "cloud-backend/internal/usecase/storage"
 )
+
+type FolderService interface {
+	CreateFolder(ctx context.Context, p storageuc.CreateFolderParams) (entity.Folder, error)
+	GetFolder(ctx context.Context, userID, folderID uuid.UUID) (entity.Folder, error)
+	ListFolders(ctx context.Context, userID uuid.UUID, parentID *uuid.UUID) ([]entity.Folder, error)
+	RenameFolder(ctx context.Context, userID, folderID uuid.UUID, name string) (entity.Folder, error)
+	MoveFolder(ctx context.Context, p storageuc.MoveFolderParams) error
+	DeleteFolder(ctx context.Context, userID, folderID uuid.UUID) error
+	MoveBlob(ctx context.Context, userID, blobID uuid.UUID, folderID *uuid.UUID) error
+}
 
 func createFolder(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +55,7 @@ func createFolder(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "name must not be blank")
 			return
 		}
-		folder, err := d.Storage.CreateFolder(r.Context(), storageuc.CreateFolderParams{
+		folder, err := d.Folders.CreateFolder(r.Context(), storageuc.CreateFolderParams{
 			UserID:   uid,
 			ParentID: parentID,
 			Name:     name,
@@ -68,7 +79,7 @@ func getFolder(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid folder_id")
 			return
 		}
-		folder, err := d.Storage.GetFolder(r.Context(), uid, folderID)
+		folder, err := d.Folders.GetFolder(r.Context(), uid, folderID)
 		if err != nil {
 			writeFolderErr(w, err, d.Logger)
 			return
@@ -92,7 +103,7 @@ func listFolders(d Deps) http.HandlerFunc {
 			}
 			parentID = &parsed
 		}
-		folders, err := d.Storage.ListFolders(r.Context(), uid, parentID)
+		folders, err := d.Folders.ListFolders(r.Context(), uid, parentID)
 		if err != nil {
 			writeFolderErr(w, err, d.Logger)
 			return
@@ -130,7 +141,7 @@ func renameFolder(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "name must not be blank")
 			return
 		}
-		folder, err := d.Storage.RenameFolder(r.Context(), uid, folderID, name)
+		folder, err := d.Folders.RenameFolder(r.Context(), uid, folderID, name)
 		if err != nil {
 			writeFolderErr(w, err, d.Logger)
 			return
@@ -164,7 +175,7 @@ func moveFolder(d Deps) http.HandlerFunc {
 			}
 			newParentID = &parsed
 		}
-		if err := d.Storage.MoveFolder(r.Context(), storageuc.MoveFolderParams{
+		if err := d.Folders.MoveFolder(r.Context(), storageuc.MoveFolderParams{
 			FolderID:    folderID,
 			UserID:      uid,
 			NewParentID: newParentID,
@@ -187,7 +198,7 @@ func deleteFolder(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid folder_id")
 			return
 		}
-		if err := d.Storage.DeleteFolder(r.Context(), uid, folderID); err != nil {
+		if err := d.Folders.DeleteFolder(r.Context(), uid, folderID); err != nil {
 			writeFolderErr(w, err, d.Logger)
 			return
 		}
@@ -220,7 +231,7 @@ func moveBlob(d Deps) http.HandlerFunc {
 			}
 			folderID = &parsed
 		}
-		if err := d.Storage.MoveBlob(r.Context(), uid, blobID, folderID); err != nil {
+		if err := d.Folders.MoveBlob(r.Context(), uid, blobID, folderID); err != nil {
 			writeFolderErr(w, err, d.Logger)
 			return
 		}
@@ -232,7 +243,6 @@ func folderToDTO(f entity.Folder) dto.FolderItem {
 	item := dto.FolderItem{
 		FolderID:  f.ID.String(),
 		Name:      f.Name,
-		TotalSize: f.TotalSize,
 		CreatedAt: f.CreatedAt,
 	}
 	if f.ParentID != nil {

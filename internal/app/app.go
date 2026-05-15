@@ -27,14 +27,18 @@ import (
 	mailerpkg "cloud-backend/pkg/mailer"
 )
 
-// sessionCleaner — минимальный интерфейс для фоновой джобы очистки сессий.
 type sessionCleaner interface {
 	CleanOrphanedSessions(ctx context.Context) error
 }
 
-// trashCleaner — минимальный интерфейс для фоновой джобы очистки корзины.
 type trashCleaner interface {
 	CleanExpiredTrash(ctx context.Context, ttl time.Duration) error
+}
+
+type wiredDeps struct {
+	router   v1.Deps
+	sessions sessionCleaner
+	trash    trashCleaner
 }
 
 func Run(cfg config.Config, log zerolog.Logger) error {
@@ -47,40 +51,58 @@ func Run(cfg config.Config, log zerolog.Logger) error {
 	}
 	defer pool.Close()
 
-	deps, cleaner, trashSvc, cleanup, err := wireDeps(ctx, cfg, log, pool)
+	redisClient, closeRedis, err := rediscache.NewClient(ctx, cfg.RedisURL)
+	if err != nil {
+		return fmt.Errorf("redis: %w", err)
+	}
+	defer closeRedis()
+	log.Info().Str("url", cfg.RedisURL).Msg("redis connected")
+
+	ms, err := miniostore.NewStore(miniostore.StoreConfig{
+		Endpoint:       cfg.MinIO.Endpoint,
+		PublicEndpoint: cfg.MinIO.PublicEndpoint,
+		AccessKey:      cfg.MinIO.AccessKey,
+		SecretKey:      cfg.MinIO.SecretKey,
+		Bucket:         cfg.MinIO.Bucket,
+		UseSSL:         cfg.MinIO.UseSSL,
+		Region:         cfg.MinIO.Region,
+	})
+	if err != nil {
+		return fmt.Errorf("minio: %w", err)
+	}
+	if err := ms.EnsureBucket(ctx); err != nil {
+		return fmt.Errorf("minio bucket: %w", err)
+	}
+
+	wired, err := wireDeps(ctx, cfg, log, pool, redisClient, ms)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
 
-	go runSessionCleanupJob(ctx, cleaner, log)
-	go runTrashCleanupJob(ctx, trashSvc, log)
+	go runSessionCleanupJob(ctx, wired.sessions, log)
+	go runTrashCleanupJob(ctx, wired.trash, cfg.TrashTTL, log)
 
-	return serve(ctx, newHTTPServer(cfg, deps, log), log, cfg.Server.ShutdownTimeout)
+	return serve(ctx, newHTTPServer(cfg, wired.router, log), log, cfg.Server.ShutdownTimeout)
 }
 
-// wireDeps строит граф зависимостей приложения поверх уже открытого пула БД.
-// Возвращает deps, sessionCleaner, trashCleaner, cleanup для внешних соединений.
-func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *pgxpool.Pool) (v1.Deps, sessionCleaner, trashCleaner, func(), error) {
+func wireDeps(
+	ctx context.Context,
+	cfg config.Config,
+	log zerolog.Logger,
+	pool *pgxpool.Pool,
+	redisClient *goredis.Client,
+	ms *miniostore.Store,
+) (wiredDeps, error) {
 	store := postgres.NewStorage(pool)
 	tokens := jwtpkg.NewService([]byte(cfg.JWT.Secret), cfg.JWT.AccessTTL)
 
-	redisClient, cleanup, err := connectRedis(ctx, cfg.RedisURL, log)
-	if err != nil {
-		return v1.Deps{}, nil, nil, func() {}, err
-	}
-
 	blocklist := rediscache.NewSessionBlocklist(redisClient)
 	publicKeyRL := rediscache.NewRateLimiter(redisClient, "rl:pubkey:", 20, time.Minute)
+	loginRL := rediscache.NewRateLimiter(redisClient, "rl:login:", 10, time.Minute)
 
 	mailer := mailerpkg.New(mailerpkg.Config{
 		ResendAPIKey: cfg.SMTP.ResendAPIKey,
-		Host:         cfg.SMTP.Host,
-		Port:         cfg.SMTP.Port,
-		Username:     cfg.SMTP.Username,
-		Password:     cfg.SMTP.Password,
 		From:         cfg.SMTP.From,
-		TLS:          cfg.SMTP.TLS,
 	})
 
 	authSvc := &authuc.Service{
@@ -96,26 +118,15 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 		Notifier:       mailer,
 	}
 
-	ms, err := miniostore.NewStore(miniostore.StoreConfig{
-		Endpoint:       cfg.MinIO.Endpoint,
-		PublicEndpoint: cfg.MinIO.PublicEndpoint,
-		AccessKey:      cfg.MinIO.AccessKey,
-		SecretKey:      cfg.MinIO.SecretKey,
-		Bucket:         cfg.MinIO.Bucket,
-		UseSSL:         cfg.MinIO.UseSSL,
-		Region:         cfg.MinIO.Region,
-	})
-	if err != nil {
-		return v1.Deps{}, nil, nil, cleanup, fmt.Errorf("minio: %w", err)
-	}
-	if err := ms.EnsureBucket(ctx); err != nil {
-		return v1.Deps{}, nil, nil, cleanup, fmt.Errorf("minio bucket: %w", err)
-	}
 	storageSvc := &storageuc.Service{
-		Objects:    ms,
-		Blobs:      store,
-		Folders:    store,
-		PresignTTL: cfg.MinIO.PresignTTL,
+		Objects:        ms,
+		Blobs:          store,
+		BlobTrash:      store,
+		Folders:        store,
+		FolderTrash:    store,
+		PresignTTL:     cfg.MinIO.PresignTTL,
+		MaxUploadBytes: cfg.MaxUploadBytes,
+		QuotaBytes:     cfg.StorageQuotaBytes,
 	}
 
 	sharingSvc := &sharinguc.Service{
@@ -128,16 +139,24 @@ func wireDeps(ctx context.Context, cfg config.Config, log zerolog.Logger, pool *
 		Logger:     log,
 	}
 
-	return v1.Deps{
-		Auth:                 authSvc,
-		Tokens:               tokens,
-		Sessions:             blocklist,
-		Storage:              storageSvc,
-		Sharing:              sharingSvc,
-		PublicKeyRateLimiter: publicKeyRL,
-		RefreshCookie:        cfg.RefreshCookie,
-		Logger:               log,
-	}, authSvc, storageSvc, cleanup, nil
+	return wiredDeps{
+		router: v1.Deps{
+			Auth:                 authSvc,
+			DeviceSessions:       authSvc,
+			Tokens:               tokens,
+			Blocklist:            blocklist,
+			Blobs:                storageSvc,
+			Folders:              storageSvc,
+			Trash:                storageSvc,
+			Sharing:              sharingSvc,
+			PublicKeyRateLimiter: publicKeyRL,
+			LoginRateLimiter:     loginRL,
+			RefreshCookie:        cfg.RefreshCookie,
+			Logger:               log,
+		},
+		sessions: authSvc,
+		trash:    storageSvc,
+	}, nil
 }
 
 func newHTTPServer(cfg config.Config, deps v1.Deps, log zerolog.Logger) *http.Server {
@@ -167,9 +186,7 @@ func runSessionCleanupJob(ctx context.Context, svc sessionCleaner, log zerolog.L
 	}
 }
 
-const trashTTL = 30 * 24 * time.Hour
-
-func runTrashCleanupJob(ctx context.Context, svc trashCleaner, log zerolog.Logger) {
+func runTrashCleanupJob(ctx context.Context, svc trashCleaner, ttl time.Duration, log zerolog.Logger) {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 	for {
@@ -178,7 +195,7 @@ func runTrashCleanupJob(ctx context.Context, svc trashCleaner, log zerolog.Logge
 			return
 		case <-ticker.C:
 			cleanCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-			if err := svc.CleanExpiredTrash(cleanCtx, trashTTL); err != nil {
+			if err := svc.CleanExpiredTrash(cleanCtx, ttl); err != nil {
 				log.Error().Err(err).Msg("trash cleanup job failed")
 			}
 			cancel()
@@ -212,21 +229,4 @@ func serve(ctx context.Context, srv *http.Server, log zerolog.Logger, shutdownTi
 		log.Info().Msg("shutdown complete")
 	}
 	return nil
-}
-
-func connectRedis(ctx context.Context, redisURL string, log zerolog.Logger) (*goredis.Client, func(), error) {
-	opts, err := goredis.ParseURL(redisURL)
-	if err != nil {
-		return nil, func() {}, fmt.Errorf("redis url: %w", err)
-	}
-	client := goredis.NewClient(opts)
-	if err := client.Ping(ctx).Err(); err != nil {
-		return nil, func() {}, fmt.Errorf("redis ping: %w", err)
-	}
-	log.Info().Str("url", redisURL).Msg("redis connected")
-	return client, func() {
-		if err := client.Close(); err != nil {
-			log.Error().Err(err).Msg("redis close failed")
-		}
-	}, nil
 }

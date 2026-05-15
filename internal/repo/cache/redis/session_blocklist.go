@@ -21,7 +21,6 @@ func NewSessionBlocklist(client *redis.Client) *SessionBlocklist {
 	return &SessionBlocklist{client: client}
 }
 
-// Block marks a single session as revoked for the given TTL.
 func (b *SessionBlocklist) Block(ctx context.Context, id uuid.UUID, ttl time.Duration) error {
 	return b.client.Set(ctx, keyPrefix+id.String(), 1, ttl).Err()
 }
@@ -39,7 +38,6 @@ func (b *SessionBlocklist) BlockBatch(ctx context.Context, ids []uuid.UUID, ttl 
 	return err
 }
 
-// IsBlocked reports whether the session has been explicitly revoked.
 func (b *SessionBlocklist) IsBlocked(ctx context.Context, id uuid.UUID) (bool, error) {
 	n, err := b.client.Exists(ctx, keyPrefix+id.String()).Result()
 	if err != nil {

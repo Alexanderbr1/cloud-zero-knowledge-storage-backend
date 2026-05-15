@@ -6,7 +6,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// DeviceSession — активная пользовательская сессия на конкретном устройстве.
 // Переживает ротацию refresh-токенов: last_active_at обновляется при каждом refresh,
 // но запись остаётся той же.
 type DeviceSession struct {

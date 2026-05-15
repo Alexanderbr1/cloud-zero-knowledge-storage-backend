@@ -1,5 +1,3 @@
--- One row per logged-in device. Survives refresh token rotation:
--- subsequent refreshes update last_active_at but do not create a new row.
 CREATE TABLE device_sessions (
     id             UUID        PRIMARY KEY,
     user_id        UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -11,7 +9,6 @@ CREATE TABLE device_sessions (
     revoked_at     TIMESTAMPTZ
 );
 
--- ListActiveSessions: WHERE user_id = $1 AND revoked_at IS NULL ORDER BY last_active_at DESC
 CREATE INDEX idx_device_sessions_active
     ON device_sessions (user_id, last_active_at DESC)
     WHERE revoked_at IS NULL;

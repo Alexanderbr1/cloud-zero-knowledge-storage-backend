@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"net/http"
@@ -16,13 +17,23 @@ import (
 	storageuc "cloud-backend/internal/usecase/storage"
 )
 
+type BlobService interface {
+	PresignPut(ctx context.Context, p storageuc.PresignPutParams) (*storageuc.PresignPutResult, error)
+	PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*storageuc.PresignGetResult, error)
+	DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error
+	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
+	ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folderID *uuid.UUID) ([]entity.Blob, error)
+	RenameBlob(ctx context.Context, userID, blobID uuid.UUID, name string) error
+	Search(ctx context.Context, p storageuc.SearchParams) (storageuc.SearchResult, error)
+}
+
 func storagePresignPut(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		uid, ok := restapi.MustUserID(w, r)
 		if !ok {
 			return
 		}
-		var in dto.StoragePresignPutRequest
+		var in dto.PresignPutRequest
 		if err := restapi.DecodeJSON(r, &in); err != nil {
 			restapi.WriteError(w, http.StatusBadRequest, "bad request")
 			return
@@ -51,16 +62,20 @@ func storagePresignPut(d Deps) http.HandlerFunc {
 			}
 			folderID = &parsed
 		}
-		out, err := d.Storage.PresignPut(r.Context(), storageuc.PresignPutParams{
-			UserID: uid, FileName: in.FileName, ContentType: in.ContentType,
-			FileSize: in.FileSize, EncryptedFileKey: encryptedFileKey,
-			FileIV: fileIV, FolderID: folderID,
+		out, err := d.Blobs.PresignPut(r.Context(), storageuc.PresignPutParams{
+			UserID:           uid,
+			FileName:         in.FileName,
+			ContentType:      in.ContentType,
+			FileSize:         in.FileSize,
+			EncryptedFileKey: encryptedFileKey,
+			FileIV:           fileIV,
+			FolderID:         folderID,
 		})
 		if err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
-		restapi.WriteJSON(w, http.StatusOK, dto.StoragePresignPutResponse{
+		restapi.WriteJSON(w, http.StatusOK, dto.PresignPutResponse{
 			BlobID:      out.BlobID.String(),
 			UploadURL:   out.UploadURL,
 			ExpiresIn:   out.ExpiresIn,
@@ -81,12 +96,12 @@ func storagePresignGet(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid blob_id")
 			return
 		}
-		out, err := d.Storage.PresignGet(r.Context(), uid, blobID)
+		out, err := d.Blobs.PresignGet(r.Context(), uid, blobID)
 		if err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
-		restapi.WriteJSON(w, http.StatusOK, dto.StoragePresignGetResponse{
+		restapi.WriteJSON(w, http.StatusOK, dto.PresignGetResponse{
 			BlobID:           out.BlobID.String(),
 			DownloadURL:      out.DownloadURL,
 			ExpiresIn:        out.ExpiresIn,
@@ -109,7 +124,7 @@ func storageDeleteBlob(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid blob_id")
 			return
 		}
-		if err := d.Storage.DeleteBlob(r.Context(), uid, blobID); err != nil {
+		if err := d.Blobs.DeleteBlob(r.Context(), uid, blobID); err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
@@ -131,32 +146,32 @@ func storageListBlobs(d Deps) http.HandlerFunc {
 		folderRaw := r.URL.Query().Get("folder_id")
 		switch folderRaw {
 		case "":
-			blobs, err = d.Storage.ListBlobs(r.Context(), uid)
+			blobs, err = d.Blobs.ListBlobs(r.Context(), uid)
 		case "root":
-			blobs, err = d.Storage.ListBlobsInFolder(r.Context(), uid, nil)
+			blobs, err = d.Blobs.ListBlobsInFolder(r.Context(), uid, nil)
 		default:
 			folderID, parseErr := uuid.Parse(folderRaw)
 			if parseErr != nil {
 				restapi.WriteError(w, http.StatusBadRequest, "invalid folder_id")
 				return
 			}
-			blobs, err = d.Storage.ListBlobsInFolder(r.Context(), uid, &folderID)
+			blobs, err = d.Blobs.ListBlobsInFolder(r.Context(), uid, &folderID)
 		}
 		if err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
 
-		items := make([]dto.StorageBlobItem, 0, len(blobs))
+		items := make([]dto.BlobItem, 0, len(blobs))
 		for _, b := range blobs {
 			items = append(items, blobToDTO(b))
 		}
-		restapi.WriteJSON(w, http.StatusOK, dto.StorageListBlobsResponse{Items: items})
+		restapi.WriteJSON(w, http.StatusOK, dto.ListBlobsResponse{Items: items})
 	}
 }
 
-func blobToDTO(b entity.Blob) dto.StorageBlobItem {
-	item := dto.StorageBlobItem{
+func blobToDTO(b entity.Blob) dto.BlobItem {
+	item := dto.BlobItem{
 		BlobID:           b.ID.String(),
 		FileName:         b.FileName,
 		ContentType:      b.ContentType,
@@ -197,7 +212,7 @@ func renameBlob(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "name must not be blank")
 			return
 		}
-		if err := d.Storage.RenameBlob(r.Context(), uid, blobID, name); err != nil {
+		if err := d.Blobs.RenameBlob(r.Context(), uid, blobID, name); err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
@@ -216,7 +231,7 @@ func storageSearch(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "q is required")
 			return
 		}
-		result, err := d.Storage.Search(r.Context(), storageuc.SearchParams{UserID: uid, Query: q})
+		result, err := d.Blobs.Search(r.Context(), storageuc.SearchParams{UserID: uid, Query: q})
 		if err != nil {
 			restapi.WriteInternalError(w, d.Logger, err)
 			return
@@ -260,6 +275,10 @@ func writeStorageErr(w http.ResponseWriter, err error, log zerolog.Logger) {
 		restapi.WriteError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, storageuc.ErrFolderNotFound):
 		restapi.WriteError(w, http.StatusNotFound, "folder not found")
+	case errors.Is(err, storageuc.ErrFileTooLarge):
+		restapi.WriteError(w, http.StatusRequestEntityTooLarge, "file too large")
+	case errors.Is(err, storageuc.ErrQuotaExceeded):
+		restapi.WriteError(w, http.StatusPaymentRequired, "storage quota exceeded")
 	default:
 		restapi.WriteInternalError(w, log, err)
 	}

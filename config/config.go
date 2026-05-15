@@ -1,4 +1,3 @@
-// Package config — конфигурация приложения из переменных окружения (twelve-factor).
 package config
 
 import (
@@ -10,7 +9,6 @@ import (
 	"time"
 )
 
-// Config — конфигурация приложения.
 type Config struct {
 	HTTPAddr string
 
@@ -20,6 +18,10 @@ type Config struct {
 
 	LogLevel string
 
+	StorageQuotaBytes int64
+	MaxUploadBytes    int64
+	TrashTTL          time.Duration
+
 	Server        ServerConfig
 	JWT           JWTConfig
 	RefreshCookie RefreshCookieConfig
@@ -27,23 +29,19 @@ type Config struct {
 	SMTP          SMTPConfig
 }
 
-// ServerConfig — таймауты HTTP-сервера.
 type ServerConfig struct {
-	ReadTimeout     time.Duration // HTTP_READ_TIMEOUT (default: 35m — даёт запас для крупных ответов)
-	WriteTimeout    time.Duration // HTTP_WRITE_TIMEOUT (default: 35m)
-	IdleTimeout     time.Duration // HTTP_IDLE_TIMEOUT (default: 120s)
-	ShutdownTimeout time.Duration // HTTP_SHUTDOWN_TIMEOUT (default: 10s)
+	ReadTimeout     time.Duration
+	WriteTimeout    time.Duration
+	IdleTimeout     time.Duration
+	ShutdownTimeout time.Duration
 }
 
-// JWTConfig — параметры JWT и refresh-токенов.
 type JWTConfig struct {
-	// Secret — ключ подписи HS256. Минимум 32 символа (256 бит).
 	Secret     string
 	AccessTTL  time.Duration
 	RefreshTTL time.Duration
 }
 
-// RefreshCookieConfig — атрибуты HttpOnly-куки с refresh-токеном.
 type RefreshCookieConfig struct {
 	Name     string
 	Path     string
@@ -52,7 +50,6 @@ type RefreshCookieConfig struct {
 	SameSite http.SameSite
 }
 
-// MinIOConfig — S3-совместимое объектное хранилище.
 type MinIOConfig struct {
 	Endpoint       string
 	PublicEndpoint string
@@ -64,19 +61,11 @@ type MinIOConfig struct {
 	PresignTTL     time.Duration
 }
 
-// SMTPConfig — параметры для отправки email-уведомлений.
-// Resend API используется в приоритете; SMTP — резерв; если ничего не задано — no-op.
 type SMTPConfig struct {
-	ResendAPIKey string // RESEND_API_KEY — preferred (HTTPS/443, works through VPNs)
-	Host         string // SMTP_HOST — fallback
-	Port         int    // SMTP_PORT (default 587)
-	Username     string // SMTP_USERNAME
-	Password     string // SMTP_PASSWORD
-	From         string // SMTP_FROM
-	TLS          bool   // SMTP_TLS — true для SMTPS (port 465)
+	ResendAPIKey string
+	From         string
 }
 
-// Load читает конфигурацию из env и возвращает сразу все ошибки валидации.
 func Load() (Config, error) {
 	l := &loader{}
 	cfg := l.build()
@@ -86,22 +75,24 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-// loader накапливает ошибки конфигурации и не останавливается на первой.
 type loader struct {
 	errs []string
 }
 
 func (l *loader) build() Config {
 	return Config{
-		HTTPAddr:      envStr("HTTP_ADDR", ":8080"),
-		DatabaseURL:   l.requireStr("DATABASE_URL"),
-		RedisURL:      l.requireStr("REDIS_URL"),
-		LogLevel:      envStr("LOG_LEVEL", "info"),
-		Server:        l.buildServer(),
-		JWT:           l.buildJWT(),
-		RefreshCookie: l.buildRefreshCookie(),
-		MinIO:         l.buildMinIO(),
-		SMTP:          l.buildSMTP(),
+		HTTPAddr:          envStr("HTTP_ADDR", ":8080"),
+		DatabaseURL:       l.requireStr("DATABASE_URL"),
+		RedisURL:          l.requireStr("REDIS_URL"),
+		LogLevel:          envStr("LOG_LEVEL", "info"),
+		StorageQuotaBytes: envInt64("STORAGE_QUOTA_BYTES", 0),
+		MaxUploadBytes:    envInt64("MAX_UPLOAD_BYTES", 0),
+		TrashTTL:          l.requirePosDuration("TRASH_TTL", 30*24*time.Hour),
+		Server:            l.buildServer(),
+		JWT:               l.buildJWT(),
+		RefreshCookie:     l.buildRefreshCookie(),
+		MinIO:             l.buildMinIO(),
+		SMTP:              l.buildSMTP(),
 	}
 }
 
@@ -159,22 +150,12 @@ func (l *loader) buildMinIO() MinIOConfig {
 }
 
 func (l *loader) buildSMTP() SMTPConfig {
-	cfg := SMTPConfig{
+	return SMTPConfig{
 		ResendAPIKey: envStr("RESEND_API_KEY", ""),
-		Host:         envStr("SMTP_HOST", ""),
-		Port:         envInt("SMTP_PORT", 587),
-		Username:     envStr("SMTP_USERNAME", ""),
-		Password:     envStr("SMTP_PASSWORD", ""),
 		From:         envStr("SMTP_FROM", ""),
-		TLS:          envBool("SMTP_TLS", false),
 	}
-	if cfg.ResendAPIKey == "" && cfg.Host == "" {
-		l.errs = append(l.errs, "email transport required: set RESEND_API_KEY (preferred) or SMTP_HOST")
-	}
-	return cfg
 }
 
-// requireStr добавляет ошибку, если переменная не задана или пуста.
 func (l *loader) requireStr(key string) string {
 	v := envStr(key, "")
 	if v == "" {
@@ -183,7 +164,6 @@ func (l *loader) requireStr(key string) string {
 	return v
 }
 
-// requirePosDuration возвращает duration ≥ 0 или добавляет ошибку при невалидном / неположительном значении.
 func (l *loader) requirePosDuration(key string, def time.Duration) time.Duration {
 	raw, ok := os.LookupEnv(key)
 	if !ok || raw == "" {
@@ -201,7 +181,6 @@ func (l *loader) requirePosDuration(key string, def time.Duration) time.Duration
 	return d
 }
 
-// envStr читает строковую переменную окружения или возвращает def.
 func envStr(key, def string) string {
 	if v, ok := os.LookupEnv(key); ok {
 		return v
@@ -209,21 +188,18 @@ func envStr(key, def string) string {
 	return def
 }
 
-// envInt читает целочисленную переменную окружения или возвращает def.
-func envInt(key string, def int) int {
+func envInt64(key string, def int64) int64 {
 	v, ok := os.LookupEnv(key)
 	if !ok || v == "" {
 		return def
 	}
-	n, err := strconv.Atoi(v)
+	n, err := strconv.ParseInt(v, 10, 64)
 	if err != nil {
 		return def
 	}
 	return n
 }
 
-// envBool читает булеву переменную окружения (1/0, true/false, t/f и т.д.).
-// При невалидном значении молча возвращает def — булевы флаги не критичны.
 func envBool(key string, def bool) bool {
 	v, ok := os.LookupEnv(key)
 	if !ok || v == "" {
@@ -236,7 +212,6 @@ func envBool(key string, def bool) bool {
 	return b
 }
 
-// parseSameSite преобразует строку в http.SameSite и возвращает ошибку для неизвестных значений.
 func parseSameSite(s string) (http.SameSite, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "strict":

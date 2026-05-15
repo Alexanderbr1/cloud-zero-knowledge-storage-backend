@@ -2,7 +2,6 @@ package entity
 
 import "github.com/google/uuid"
 
-// User — учётная запись для JWT-аутентификации.
 type User struct {
 	ID                  uuid.UUID
 	Email               string
@@ -10,6 +9,6 @@ type User struct {
 	SRPVerifier         string // hex-encoded SRP-6a verifier v = g^x mod N
 	BcryptSalt          string // bcrypt salt string used to harden x = H(srpSalt || bcrypt(password, bcryptSalt))
 	CryptoSalt          []byte // PBKDF2 salt for client-side master key derivation
-	PublicKey           []byte // SPKI-encoded P-256 public key; nil for legacy accounts
-	EncryptedPrivateKey []byte // two-level wrapped EC private key; nil for legacy accounts
+	PublicKey           []byte // SPKI-encoded P-256 public key
+	EncryptedPrivateKey []byte // two-level wrapped EC private key
 }

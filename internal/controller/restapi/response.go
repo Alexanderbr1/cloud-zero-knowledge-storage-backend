@@ -1,4 +1,3 @@
-// Package restapi — REST delivery layer.
 package restapi
 
 import (
@@ -10,22 +9,10 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// maxJSONBodyBytes — защита от чрезмерно больших JSON-тел.
 const maxJSONBodyBytes = 4 << 20 // 4 MiB
 
 type errorResponse struct {
 	Error string `json:"error"`
-}
-
-type fieldError struct {
-	Field string `json:"field"`
-	Tag   string `json:"tag"`
-	Value string `json:"value"`
-}
-
-type validationErrorResponse struct {
-	Error  string       `json:"error"`
-	Fields []fieldError `json:"fields"`
 }
 
 func WriteJSON(w http.ResponseWriter, status int, v any) {
@@ -43,7 +30,6 @@ func WriteInternalError(w http.ResponseWriter, log zerolog.Logger, err error) {
 	WriteJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal error"})
 }
 
-// DecodeJSON читает тело запроса как JSON с ограничением размера.
 func DecodeJSON(r *http.Request, dst any) error {
 	if r.Body == nil {
 		return errors.New("empty body")

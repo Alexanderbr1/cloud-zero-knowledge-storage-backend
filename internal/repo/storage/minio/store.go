@@ -12,7 +12,6 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-// StoreConfig holds connection parameters for the MinIO / S3-compatible store.
 type StoreConfig struct {
 	Endpoint       string
 	PublicEndpoint string
@@ -23,7 +22,6 @@ type StoreConfig struct {
 	Region         string
 }
 
-// Store — MinIO / S3-совместимый ObjectStore.
 type Store struct {
 	client        *minio.Client
 	presignClient *minio.Client

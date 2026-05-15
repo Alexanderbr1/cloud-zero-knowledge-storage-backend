@@ -15,38 +15,19 @@ import (
 )
 
 const listFoldersRootSQL = `
-	WITH RECURSIVE descendants(root_id, folder_id) AS (
-		SELECT id AS root_id, id AS folder_id FROM folders WHERE user_id = $1 AND parent_id IS NULL AND deleted_at IS NULL
-		UNION ALL
-		SELECT d.root_id, f.id FROM folders f JOIN descendants d ON f.parent_id = d.folder_id WHERE f.deleted_at IS NULL
-	),
-	folder_sizes AS (
-		SELECT d.root_id, COALESCE(SUM(b.file_size), 0) AS total_size
-		FROM descendants d LEFT JOIN stored_blobs b ON b.folder_id = d.folder_id AND b.deleted_at IS NULL
-		GROUP BY d.root_id
-	)
-	SELECT f.id, f.user_id, f.parent_id, f.name, f.created_at, COALESCE(fs.total_size, 0)
-	FROM folders f LEFT JOIN folder_sizes fs ON fs.root_id = f.id
-	WHERE f.user_id = $1 AND f.parent_id IS NULL AND f.deleted_at IS NULL
-	ORDER BY f.name`
+	SELECT id, user_id, parent_id, name, created_at
+	FROM folders
+	WHERE user_id = $1 AND parent_id IS NULL AND deleted_at IS NULL
+	ORDER BY name`
 
 const listFoldersChildSQL = `
-	WITH RECURSIVE descendants(root_id, folder_id) AS (
-		SELECT id AS root_id, id AS folder_id FROM folders WHERE user_id = $1 AND parent_id = $2 AND deleted_at IS NULL
-		UNION ALL
-		SELECT d.root_id, f.id FROM folders f JOIN descendants d ON f.parent_id = d.folder_id WHERE f.deleted_at IS NULL
-	),
-	folder_sizes AS (
-		SELECT d.root_id, COALESCE(SUM(b.file_size), 0) AS total_size
-		FROM descendants d LEFT JOIN stored_blobs b ON b.folder_id = d.folder_id AND b.deleted_at IS NULL
-		GROUP BY d.root_id
-	)
-	SELECT f.id, f.user_id, f.parent_id, f.name, f.created_at, COALESCE(fs.total_size, 0)
-	FROM folders f LEFT JOIN folder_sizes fs ON fs.root_id = f.id
-	WHERE f.user_id = $1 AND f.parent_id = $2 AND f.deleted_at IS NULL
-	ORDER BY f.name`
+	SELECT id, user_id, parent_id, name, created_at
+	FROM folders
+	WHERE user_id = $1 AND parent_id = $2 AND deleted_at IS NULL
+	ORDER BY name`
 
-var _ storageuc.FolderRegistry = (*Storage)(nil)
+var _ storageuc.FolderRepo = (*Storage)(nil)
+var _ storageuc.FolderTrashRepo = (*Storage)(nil)
 
 func (s *Storage) CreateFolder(ctx context.Context, p storageuc.CreateFolderParams) (entity.Folder, error) {
 	var f entity.Folder
@@ -139,73 +120,14 @@ func (s *Storage) MoveFolder(ctx context.Context, p storageuc.MoveFolderParams) 
 	return nil
 }
 
-// DeleteFolder atomically checks that the folder is empty and deletes it within a
-// single transaction, eliminating the TOCTOU race between the emptiness check and the
-// DELETE. Returns ErrFolderNotEmpty if the folder has children (subfolders or blobs),
-// ErrFolderNotFound if the row is absent or belongs to a different user.
-func (s *Storage) DeleteFolder(ctx context.Context, folderID, userID uuid.UUID) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-
-	// Verify ownership first — before the emptiness check — so that a non-owned
-	// folderID always yields ErrFolderNotFound and never leaks whether the folder
-	// is empty or not.
-	var owned bool
-	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM folders WHERE id = $1 AND user_id = $2)`,
-		folderID, userID,
-	).Scan(&owned); err != nil {
-		return err
-	}
-	if !owned {
-		return storageuc.ErrFolderNotFound
-	}
-
-	var hasChildren bool
-	if err := tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM folders      WHERE parent_id = $1 AND deleted_at IS NULL
-			UNION ALL
-			SELECT 1 FROM stored_blobs WHERE folder_id = $1 AND deleted_at IS NULL
-		)
-	`, folderID).Scan(&hasChildren); err != nil {
-		return err
-	}
-	if hasChildren {
-		return storageuc.ErrFolderNotEmpty
-	}
-
-	if _, err := tx.Exec(ctx,
-		`DELETE FROM folders WHERE id = $1 AND user_id = $2`,
-		folderID, userID,
-	); err != nil {
-		return err
-	}
-
-	return tx.Commit(ctx)
-}
-
 func (s *Storage) SearchFolders(ctx context.Context, userID uuid.UUID, query string) ([]entity.Folder, error) {
 	rows, err := s.pool.Query(ctx, `
-		WITH RECURSIVE descendants(root_id, folder_id) AS (
-			SELECT id AS root_id, id AS folder_id FROM folders WHERE user_id = $1 AND name ILIKE $2
-			UNION ALL
-			SELECT d.root_id, f.id FROM folders f JOIN descendants d ON f.parent_id = d.folder_id
-		),
-		folder_sizes AS (
-			SELECT d.root_id, COALESCE(SUM(b.file_size), 0) AS total_size
-			FROM descendants d LEFT JOIN stored_blobs b ON b.folder_id = d.folder_id
-			GROUP BY d.root_id
-		)
-		SELECT f.id, f.user_id, f.parent_id, f.name, f.created_at, COALESCE(fs.total_size, 0)
-		FROM folders f LEFT JOIN folder_sizes fs ON fs.root_id = f.id
-		WHERE f.user_id = $1 AND f.name ILIKE $2
-		ORDER BY f.name
+		SELECT id, user_id, parent_id, name, created_at
+		FROM folders
+		WHERE user_id = $1 AND name ILIKE $2 ESCAPE '\' AND deleted_at IS NULL
+		ORDER BY name
 		LIMIT 50`,
-		userID, "%"+query+"%",
+		userID, "%"+escapeLike(query)+"%",
 	)
 	if err != nil {
 		return nil, err
@@ -218,7 +140,7 @@ func scanFolders(rows pgx.Rows) ([]entity.Folder, error) {
 	var out []entity.Folder
 	for rows.Next() {
 		var f entity.Folder
-		if err := rows.Scan(&f.ID, &f.UserID, &f.ParentID, &f.Name, &f.CreatedAt, &f.TotalSize); err != nil {
+		if err := rows.Scan(&f.ID, &f.UserID, &f.ParentID, &f.Name, &f.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, f)
@@ -226,7 +148,6 @@ func scanFolders(rows pgx.Rows) ([]entity.Folder, error) {
 	return out, rows.Err()
 }
 
-// IsDescendantOf checks whether candidateID is in the subtree rooted at ancestorID.
 // Used to prevent cycles when moving a folder into one of its own descendants.
 func (s *Storage) IsDescendantOf(ctx context.Context, ancestorID, candidateID uuid.UUID) (bool, error) {
 	var result bool
@@ -243,8 +164,6 @@ func (s *Storage) IsDescendantOf(ctx context.Context, ancestorID, candidateID uu
 	`, ancestorID, candidateID).Scan(&result)
 	return result, err
 }
-
-// ─── Trash ────────────────────────────────────────────────────────────────────
 
 // TrashFolder soft-deletes a folder and its entire subtree (subfolders + blobs) atomically.
 func (s *Storage) TrashFolder(ctx context.Context, folderID, userID uuid.UUID) (bool, error) {
@@ -275,16 +194,14 @@ func (s *Storage) TrashFolder(ctx context.Context, folderID, userID uuid.UUID) (
 	}
 
 	if _, err := tx.Exec(ctx,
-		`UPDATE folders SET deleted_at = NOW(), original_parent_id = parent_id WHERE id = ANY($1)`,
+		`UPDATE folders SET deleted_at = NOW() WHERE id = ANY($1)`,
 		ids,
 	); err != nil {
 		return false, err
 	}
 
 	if _, err := tx.Exec(ctx,
-		`UPDATE stored_blobs
-		 SET deleted_at = NOW(), original_folder_id = folder_id
-		 WHERE folder_id = ANY($1) AND deleted_at IS NULL`,
+		`UPDATE stored_blobs SET deleted_at = NOW() WHERE folder_id = ANY($1) AND deleted_at IS NULL`,
 		ids,
 	); err != nil {
 		return false, err
@@ -305,7 +222,7 @@ func (s *Storage) RestoreFolder(ctx context.Context, folderID, userID uuid.UUID)
 
 	var originalParentID *uuid.UUID
 	err = tx.QueryRow(ctx,
-		`SELECT original_parent_id FROM folders
+		`SELECT parent_id FROM folders
 		 WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL`,
 		folderID, userID,
 	).Scan(&originalParentID)
@@ -350,9 +267,8 @@ func (s *Storage) RestoreFolder(ctx context.Context, folderID, userID uuid.UUID)
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE folders
-		SET deleted_at        = NULL,
-		    original_parent_id = NULL,
-		    parent_id          = CASE WHEN id = $1 THEN $3 ELSE parent_id END
+		SET deleted_at = NULL,
+		    parent_id  = CASE WHEN id = $1 THEN $3 ELSE parent_id END
 		WHERE id = ANY($2)`,
 		folderID, ids, restoredParentID,
 	); err != nil {
@@ -361,9 +277,7 @@ func (s *Storage) RestoreFolder(ctx context.Context, folderID, userID uuid.UUID)
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE stored_blobs
-		SET deleted_at         = NULL,
-		    folder_id          = COALESCE(original_folder_id, folder_id),
-		    original_folder_id = NULL
+		SET deleted_at = NULL
 		WHERE folder_id = ANY($1) AND deleted_at IS NOT NULL`,
 		ids,
 	); err != nil {
@@ -438,7 +352,7 @@ func (s *Storage) HardDeleteFolder(ctx context.Context, folderID, userID uuid.UU
 
 func (s *Storage) ListTrashedFolders(ctx context.Context, userID uuid.UUID) ([]entity.Folder, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT f.id, f.user_id, f.parent_id, f.name, f.created_at, 0 AS total_size
+		SELECT f.id, f.user_id, f.parent_id, f.name, f.created_at
 		FROM folders f
 		WHERE f.user_id = $1
 		  AND f.deleted_at IS NOT NULL

@@ -2,21 +2,17 @@ package dto
 
 import "time"
 
-// GetPublicKeyResponse — public key of a user, used by sender before creating a share.
 type GetPublicKeyResponse struct {
-	PublicKey string `json:"public_key"` // base64-encoded SPKI P-256 public key
+	PublicKey string `json:"public_key"` // base64 SPKI P-256
 }
 
-// CreateShareRequest — owner creates a share for a recipient.
-// All crypto is done client-side; the server only stores the opaque blobs.
 type CreateShareRequest struct {
-	RecipientEmail string  `json:"recipient_email" validate:"required,email,max=320"`
-	EphemeralPub   string  `json:"ephemeral_pub"   validate:"required"`  // base64 SPKI of ephemeral EC key
+	RecipientEmail string  `json:"recipient_email"  validate:"required,email,max=320"`
+	EphemeralPub   string  `json:"ephemeral_pub"    validate:"required"` // base64 SPKI ephemeral EC key
 	WrappedFileKey string  `json:"wrapped_file_key" validate:"required"` // base64 AES-KW(KEK, fileKey)
-	ExpiresAt      *string `json:"expires_at,omitempty"`                 // RFC3339 optional expiry
+	ExpiresAt      *string `json:"expires_at,omitempty"`                 // RFC3339
 }
 
-// ShareResponse — a single share record returned to the caller.
 type ShareResponse struct {
 	ShareID         string    `json:"share_id"`
 	BlobID          string    `json:"blob_id"`
@@ -28,9 +24,8 @@ type ShareResponse struct {
 	WrappedFileKey  string    `json:"wrapped_file_key"` // base64
 	ExpiresAt       *string   `json:"expires_at,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
-	// DownloadURL is populated only for GetSharedFile.
-	DownloadURL string `json:"download_url,omitempty"`
-	FileIV      string `json:"file_iv,omitempty"` // base64, only for GetSharedFile
+	DownloadURL     string    `json:"download_url,omitempty"` // GetSharedFile only
+	FileIV          string    `json:"file_iv,omitempty"`      // base64; GetSharedFile only
 }
 
 type ListSharesResponse struct {
