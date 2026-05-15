@@ -59,6 +59,7 @@ func NewRouter(d Deps) chi.Router {
 			r.Post("/presign", storagePresignPut(d))
 
 			r.Get("/blobs", storageListBlobs(d))
+			r.Post("/blobs/{blobID}/confirm-upload", storageConfirmUpload(d))
 			r.Post("/blobs/{blobID}/presign-get", storagePresignGet(d))
 			r.Delete("/blobs/{blobID}", storageDeleteBlob(d))
 			r.Patch("/blobs/{blobID}", renameBlob(d))

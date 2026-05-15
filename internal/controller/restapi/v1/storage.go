@@ -19,6 +19,7 @@ import (
 
 type BlobService interface {
 	PresignPut(ctx context.Context, p storageuc.PresignPutParams) (*storageuc.PresignPutResult, error)
+	ConfirmUpload(ctx context.Context, userID, blobID uuid.UUID) error
 	PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*storageuc.PresignGetResult, error)
 	DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error
 	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
@@ -110,6 +111,25 @@ func storagePresignGet(d Deps) http.HandlerFunc {
 			EncryptedFileKey: base64.StdEncoding.EncodeToString(out.EncryptedFileKey),
 			FileIV:           base64.StdEncoding.EncodeToString(out.FileIV),
 		})
+	}
+}
+
+func storageConfirmUpload(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, ok := restapi.MustUserID(w, r)
+		if !ok {
+			return
+		}
+		blobID, err := uuid.Parse(chi.URLParam(r, "blobID"))
+		if err != nil {
+			restapi.WriteError(w, http.StatusBadRequest, "invalid blob_id")
+			return
+		}
+		if err := d.Blobs.ConfirmUpload(r.Context(), uid, blobID); err != nil {
+			writeStorageErr(w, err, d.Logger)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

@@ -24,6 +24,8 @@ type ObjectStore interface {
 type BlobRepo interface {
 	GetUserStorageUsed(ctx context.Context, userID uuid.UUID) (int64, error)
 	RegisterBlob(ctx context.Context, p RegisterBlobParams) error
+	ConfirmBlobUpload(ctx context.Context, blobID, userID uuid.UUID) (bool, error)
+	PurgeOrphanedBlobs(ctx context.Context, before time.Time) ([]string, error)
 	GetBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (BlobMeta, bool, error)
 	RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error)
 	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
@@ -458,6 +460,32 @@ func (s *Service) EmptyTrash(ctx context.Context, userID uuid.UUID) error {
 	}
 
 	for _, key := range append(blobKeys, folderBlobKeys...) {
+		_ = s.Objects.RemoveObject(ctx, key)
+	}
+	return nil
+}
+
+func (s *Service) ConfirmUpload(ctx context.Context, userID, blobID uuid.UUID) error {
+	dbCtx, cancel := context.WithTimeout(ctx, dbTimeout)
+	defer cancel()
+
+	ok, err := s.Blobs.ConfirmBlobUpload(dbCtx, blobID, userID)
+	if err != nil {
+		return fmt.Errorf("confirm upload: %w", err)
+	}
+	if !ok {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Service) CleanOrphanedBlobs(ctx context.Context, ttl time.Duration) error {
+	before := time.Now().Add(-ttl)
+	keys, err := s.Blobs.PurgeOrphanedBlobs(ctx, before)
+	if err != nil {
+		return fmt.Errorf("purge orphaned blobs: %w", err)
+	}
+	for _, key := range keys {
 		_ = s.Objects.RemoveObject(ctx, key)
 	}
 	return nil

@@ -27,18 +27,15 @@ import (
 	mailerpkg "cloud-backend/pkg/mailer"
 )
 
-type sessionCleaner interface {
-	CleanOrphanedSessions(ctx context.Context) error
-}
-
-type trashCleaner interface {
-	CleanExpiredTrash(ctx context.Context, ttl time.Duration) error
-}
-
 type wiredDeps struct {
 	router   v1.Deps
-	sessions sessionCleaner
-	trash    trashCleaner
+	sessions interface{ CleanOrphanedSessions(context.Context) error }
+	trash    interface {
+		CleanExpiredTrash(context.Context, time.Duration) error
+	}
+	orphans interface {
+		CleanOrphanedBlobs(context.Context, time.Duration) error
+	}
 }
 
 func Run(cfg config.Config, log zerolog.Logger) error {
@@ -79,8 +76,13 @@ func Run(cfg config.Config, log zerolog.Logger) error {
 		return err
 	}
 
-	go runSessionCleanupJob(ctx, wired.sessions, log)
-	go runTrashCleanupJob(ctx, wired.trash, cfg.TrashTTL, log)
+	go runCleanupJob(ctx, time.Hour, 30*time.Second, "session cleanup", wired.sessions.CleanOrphanedSessions, log)
+	go runCleanupJob(ctx, time.Hour, 60*time.Second, "trash cleanup", func(c context.Context) error {
+		return wired.trash.CleanExpiredTrash(c, cfg.TrashTTL)
+	}, log)
+	go runCleanupJob(ctx, time.Hour, 60*time.Second, "orphan blobs cleanup", func(c context.Context) error {
+		return wired.orphans.CleanOrphanedBlobs(c, cfg.MinIO.PresignTTL)
+	}, log)
 
 	return serve(ctx, newHTTPServer(cfg, wired.router, log), log, cfg.Server.ShutdownTimeout)
 }
@@ -156,6 +158,7 @@ func wireDeps(
 		},
 		sessions: authSvc,
 		trash:    storageSvc,
+		orphans:  storageSvc,
 	}, nil
 }
 
@@ -169,34 +172,17 @@ func newHTTPServer(cfg config.Config, deps v1.Deps, log zerolog.Logger) *http.Se
 	}
 }
 
-func runSessionCleanupJob(ctx context.Context, svc sessionCleaner, log zerolog.Logger) {
-	ticker := time.NewTicker(time.Hour)
+func runCleanupJob(ctx context.Context, interval, timeout time.Duration, name string, fn func(context.Context) error, log zerolog.Logger) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			cleanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			if err := svc.CleanOrphanedSessions(cleanCtx); err != nil {
-				log.Error().Err(err).Msg("session cleanup job failed")
-			}
-			cancel()
-		}
-	}
-}
-
-func runTrashCleanupJob(ctx context.Context, svc trashCleaner, ttl time.Duration, log zerolog.Logger) {
-	ticker := time.NewTicker(time.Hour)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			cleanCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-			if err := svc.CleanExpiredTrash(cleanCtx, ttl); err != nil {
-				log.Error().Err(err).Msg("trash cleanup job failed")
+			cleanCtx, cancel := context.WithTimeout(ctx, timeout)
+			if err := fn(cleanCtx); err != nil {
+				log.Error().Err(err).Msgf("%s failed", name)
 			}
 			cancel()
 		}

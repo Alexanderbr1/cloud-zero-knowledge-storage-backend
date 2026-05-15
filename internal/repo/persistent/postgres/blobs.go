@@ -37,7 +37,7 @@ func (s *Storage) GetBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (st
 	var m storageuc.BlobMeta
 	err := s.pool.QueryRow(ctx,
 		`SELECT object_key, content_type, encrypted_file_key, file_iv
-		 FROM stored_blobs WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
+		 FROM stored_blobs WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL AND uploaded_at IS NOT NULL`,
 		blobID, userID,
 	).Scan(&m.ObjectKey, &m.ContentType, &m.EncryptedFileKey, &m.FileIV)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -69,7 +69,7 @@ func (s *Storage) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blo
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, file_iv
 		 FROM stored_blobs
-		 WHERE user_id = $1 AND deleted_at IS NULL
+		 WHERE user_id = $1 AND deleted_at IS NULL AND uploaded_at IS NOT NULL
 		 ORDER BY created_at DESC`,
 		userID,
 	)
@@ -89,7 +89,7 @@ func (s *Storage) ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folde
 		rows, err = s.pool.Query(ctx,
 			`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, file_iv
 			 FROM stored_blobs
-			 WHERE user_id = $1 AND folder_id IS NULL AND deleted_at IS NULL
+			 WHERE user_id = $1 AND folder_id IS NULL AND deleted_at IS NULL AND uploaded_at IS NOT NULL
 			 ORDER BY created_at DESC`,
 			userID,
 		)
@@ -97,7 +97,7 @@ func (s *Storage) ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folde
 		rows, err = s.pool.Query(ctx,
 			`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, file_iv
 			 FROM stored_blobs
-			 WHERE user_id = $1 AND folder_id = $2 AND deleted_at IS NULL
+			 WHERE user_id = $1 AND folder_id = $2 AND deleted_at IS NULL AND uploaded_at IS NOT NULL
 			 ORDER BY created_at DESC`,
 			userID, folderID,
 		)
@@ -149,7 +149,7 @@ func (s *Storage) SearchBlobs(ctx context.Context, userID uuid.UUID, query strin
 		        b.created_at, b.encrypted_file_key, b.file_iv, f.name AS folder_name
 		 FROM stored_blobs b
 		 LEFT JOIN folders f ON f.id = b.folder_id
-		 WHERE b.user_id = $1 AND b.file_name ILIKE $2 ESCAPE '\' AND b.deleted_at IS NULL
+		 WHERE b.user_id = $1 AND b.file_name ILIKE $2 ESCAPE '\' AND b.deleted_at IS NULL AND b.uploaded_at IS NOT NULL
 		 ORDER BY b.created_at DESC
 		 LIMIT 200`,
 		userID, "%"+escapeLike(query)+"%",
@@ -175,6 +175,32 @@ func scanSearchBlobs(rows pgx.Rows, userID uuid.UUID) ([]storageuc.SearchBlobRec
 		out = append(out, rec)
 	}
 	return out, rows.Err()
+}
+
+func (s *Storage) ConfirmBlobUpload(ctx context.Context, blobID, userID uuid.UUID) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE stored_blobs SET uploaded_at = NOW()
+		 WHERE id = $1 AND user_id = $2 AND uploaded_at IS NULL AND deleted_at IS NULL`,
+		blobID, userID,
+	)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (s *Storage) PurgeOrphanedBlobs(ctx context.Context, before time.Time) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`DELETE FROM stored_blobs
+		 WHERE uploaded_at IS NULL AND deleted_at IS NULL AND created_at < $1
+		 RETURNING object_key`,
+		before,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanObjectKeys(rows)
 }
 
 func (s *Storage) TrashBlob(ctx context.Context, blobID, userID uuid.UUID) (bool, error) {
