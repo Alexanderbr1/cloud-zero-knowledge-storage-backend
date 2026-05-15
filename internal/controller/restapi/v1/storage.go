@@ -18,6 +18,7 @@ import (
 )
 
 type BlobService interface {
+	GetStorageUsage(ctx context.Context, userID uuid.UUID) (storageuc.StorageUsage, error)
 	PresignPut(ctx context.Context, p storageuc.PresignPutParams) (*storageuc.PresignPutResult, error)
 	ConfirmUpload(ctx context.Context, userID, blobID uuid.UUID) error
 	PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*storageuc.PresignGetResult, error)
@@ -26,6 +27,25 @@ type BlobService interface {
 	ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folderID *uuid.UUID) ([]entity.Blob, error)
 	RenameBlob(ctx context.Context, userID, blobID uuid.UUID, name string) error
 	Search(ctx context.Context, p storageuc.SearchParams) (storageuc.SearchResult, error)
+}
+
+func storageGetUsage(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, ok := restapi.MustUserID(w, r)
+		if !ok {
+			return
+		}
+		usage, err := d.Blobs.GetStorageUsage(r.Context(), uid)
+		if err != nil {
+			d.Logger.Error().Err(err).Msg("get storage usage")
+			restapi.WriteError(w, http.StatusInternalServerError, "failed to get storage usage")
+			return
+		}
+		restapi.WriteJSON(w, http.StatusOK, map[string]any{
+			"used_bytes":  usage.UsedBytes,
+			"quota_bytes": usage.QuotaBytes,
+		})
+	}
 }
 
 func storagePresignPut(d Deps) http.HandlerFunc {

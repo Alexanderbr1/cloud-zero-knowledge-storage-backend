@@ -56,6 +56,7 @@ func NewRouter(d Deps) chi.Router {
 		r.Route("/storage", func(r chi.Router) {
 			r.Use(middleware.Timeout(30 * time.Minute))
 
+			r.Get("/usage", storageGetUsage(d))
 			r.Post("/presign", storagePresignPut(d))
 
 			r.Get("/blobs", storageListBlobs(d))

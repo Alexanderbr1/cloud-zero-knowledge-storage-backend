@@ -77,6 +77,22 @@ type Service struct {
 	QuotaBytes     int64 // 0 = unlimited
 }
 
+type StorageUsage struct {
+	UsedBytes  int64
+	QuotaBytes int64
+}
+
+func (s *Service) GetStorageUsage(ctx context.Context, userID uuid.UUID) (StorageUsage, error) {
+	dbCtx, cancel := context.WithTimeout(ctx, dbTimeout)
+	defer cancel()
+
+	used, err := s.Blobs.GetUserStorageUsed(dbCtx, userID)
+	if err != nil {
+		return StorageUsage{}, fmt.Errorf("get storage used: %w", err)
+	}
+	return StorageUsage{UsedBytes: used, QuotaBytes: s.QuotaBytes}, nil
+}
+
 func (s *Service) PresignPut(ctx context.Context, p PresignPutParams) (*PresignPutResult, error) {
 	p.ContentType = strings.TrimSpace(p.ContentType)
 	blobID := uuid.New()
