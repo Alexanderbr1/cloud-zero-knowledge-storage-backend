@@ -114,6 +114,39 @@ func (s *ServerSession) PublicEphemeralHex() string {
 	return hex.EncodeToString(pad(s.B))
 }
 
+// Snapshot returns the three hex-encoded big.Int values needed to reconstruct
+// the session across process or instance boundaries (e.g. Redis storage).
+func (s *ServerSession) Snapshot() (verifierHex, bHex, BHex string) {
+	return hex.EncodeToString(s.verifier.Bytes()),
+		hex.EncodeToString(s.b.Bytes()),
+		hex.EncodeToString(pad(s.B))
+}
+
+// NewServerSessionFromSnapshot reconstructs a ServerSession from a Snapshot.
+func NewServerSessionFromSnapshot(verifierHex, bHex, BHex string) (*ServerSession, error) {
+	v, err := hexToBigInt(verifierHex)
+	if err != nil {
+		return nil, fmt.Errorf("srp: decode verifier: %w", err)
+	}
+	b, err := hexToBigInt(bHex)
+	if err != nil {
+		return nil, fmt.Errorf("srp: decode b: %w", err)
+	}
+	B, err := hexToBigInt(BHex)
+	if err != nil {
+		return nil, fmt.Errorf("srp: decode B: %w", err)
+	}
+	return &ServerSession{verifier: v, b: b, B: B}, nil
+}
+
+func hexToBigInt(h string) (*big.Int, error) {
+	b, err := hex.DecodeString(h)
+	if err != nil {
+		return nil, err
+	}
+	return new(big.Int).SetBytes(b), nil
+}
+
 // VerifyClientProof validates the client's proof M1 and returns the server proof M2.
 //
 //   - aHex       — client's public ephemeral A (hex)

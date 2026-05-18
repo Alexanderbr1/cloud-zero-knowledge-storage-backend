@@ -30,6 +30,11 @@ type BlobMeta struct {
 	FileIV           []byte
 }
 
+type PendingBlobMeta struct {
+	ObjectKey    string
+	DeclaredSize int64
+}
+
 type SearchBlobRecord struct {
 	entity.Blob
 	FolderName *string

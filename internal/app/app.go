@@ -17,7 +17,6 @@ import (
 	"cloud-backend/config"
 	v1 "cloud-backend/internal/controller/restapi/v1"
 	rediscache "cloud-backend/internal/repo/cache/redis"
-	memoryrepo "cloud-backend/internal/repo/memory"
 	"cloud-backend/internal/repo/persistent/postgres"
 	miniostore "cloud-backend/internal/repo/storage/minio"
 	authuc "cloud-backend/internal/usecase/auth"
@@ -115,7 +114,7 @@ func wireDeps(
 		Blocklist:      blocklist,
 		AccessTTL:      cfg.JWT.AccessTTL,
 		RefreshTTL:     cfg.JWT.RefreshTTL,
-		SRPSessions:    memoryrepo.NewSRPSessionStore(ctx),
+		SRPSessions:    rediscache.NewSRPSessionStore(redisClient),
 		Logger:         log,
 		Notifier:       mailer,
 	}
@@ -164,11 +163,12 @@ func wireDeps(
 
 func newHTTPServer(cfg config.Config, deps v1.Deps, log zerolog.Logger) *http.Server {
 	return &http.Server{
-		Addr:         cfg.HTTPAddr,
-		Handler:      newHTTPHandler(deps, log),
-		ReadTimeout:  cfg.Server.ReadTimeout,
-		WriteTimeout: cfg.Server.WriteTimeout,
-		IdleTimeout:  cfg.Server.IdleTimeout,
+		Addr:              cfg.HTTPAddr,
+		Handler:           newHTTPHandler(deps, log),
+		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout,
+		ReadTimeout:       cfg.Server.ReadTimeout,
+		WriteTimeout:      cfg.Server.WriteTimeout,
+		IdleTimeout:       cfg.Server.IdleTimeout,
 	}
 }
 

@@ -8,7 +8,7 @@ type PresignPutRequest struct {
 	EncryptedFileKey string  `json:"encrypted_file_key" validate:"required"` // base64
 	FileIV           string  `json:"file_iv"            validate:"required"` // base64
 	FolderID         *string `json:"folder_id"`
-	FileSize         int64   `json:"file_size"`
+	FileSize         int64   `json:"file_size"           validate:"required,min=1"`
 }
 
 type PresignPutResponse struct {

@@ -7,7 +7,16 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// On Redis failure the request is allowed through (fail open).
+// incrExpireScript atomically increments a counter and sets TTL on first call.
+// KEYS[1] = key, ARGV[1] = window seconds. Returns the new count.
+var incrExpireScript = redis.NewScript(`
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+`)
+
 type RateLimiter struct {
 	client *redis.Client
 	prefix string
@@ -21,17 +30,10 @@ func NewRateLimiter(client *redis.Client, prefix string, limit int64, window tim
 
 func (r *RateLimiter) Allow(ctx context.Context, key string) (bool, error) {
 	fullKey := r.prefix + key
-	count, err := r.client.Incr(ctx, fullKey).Result()
+	windowSec := int64(r.window.Seconds())
+	count, err := incrExpireScript.Run(ctx, r.client, []string{fullKey}, windowSec).Int64()
 	if err != nil {
-		return true, err // fail open
-	}
-	if count == 1 {
-		// Set TTL only on first increment so the window resets naturally.
-		// Treat a failed Expire as a transient error and fail open rather than
-		// blocking the key forever.
-		if err := r.client.Expire(ctx, fullKey, r.window).Err(); err != nil {
-			return true, err
-		}
+		return false, err
 	}
 	return count <= r.limit, nil
 }

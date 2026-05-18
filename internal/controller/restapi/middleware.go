@@ -78,8 +78,11 @@ func AuthMiddleware(tokens ParseBearerJWT, blocklist SessionBlocklist, log zerol
 			if sessionID != uuid.Nil {
 				blocked, err := blocklist.IsBlocked(r.Context(), sessionID)
 				if err != nil {
-					log.Warn().Err(err).Msg("blocklist check failed; failing open")
-				} else if blocked {
+					log.Error().Err(err).Msg("blocklist check failed; denying access")
+					WriteError(w, http.StatusServiceUnavailable, "service unavailable")
+					return
+				}
+				if blocked {
 					WriteError(w, http.StatusUnauthorized, "unauthorized")
 					return
 				}

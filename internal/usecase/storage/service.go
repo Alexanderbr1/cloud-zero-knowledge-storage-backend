@@ -19,12 +19,14 @@ type ObjectStore interface {
 	PresignedPutObject(ctx context.Context, objectKey string, expiry time.Duration) (*url.URL, error)
 	PresignedGetObject(ctx context.Context, objectKey string, expiry time.Duration) (*url.URL, error)
 	RemoveObject(ctx context.Context, objectKey string) error
+	StatObject(ctx context.Context, objectKey string) (int64, error)
 }
 
 type BlobRepo interface {
 	GetUserStorageUsed(ctx context.Context, userID uuid.UUID) (int64, error)
 	RegisterBlob(ctx context.Context, p RegisterBlobParams) error
-	ConfirmBlobUpload(ctx context.Context, blobID, userID uuid.UUID) (bool, error)
+	GetPendingBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (PendingBlobMeta, bool, error)
+	ConfirmBlobUploadWithSize(ctx context.Context, blobID, userID uuid.UUID, actualSize int64) (bool, error)
 	PurgeOrphanedBlobs(ctx context.Context, before time.Time) ([]string, error)
 	GetBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (BlobMeta, bool, error)
 	RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error)
@@ -485,11 +487,36 @@ func (s *Service) ConfirmUpload(ctx context.Context, userID, blobID uuid.UUID) e
 	dbCtx, cancel := context.WithTimeout(ctx, dbTimeout)
 	defer cancel()
 
-	ok, err := s.Blobs.ConfirmBlobUpload(dbCtx, blobID, userID)
+	pending, ok, err := s.Blobs.GetPendingBlobMeta(dbCtx, blobID, userID)
+	if err != nil {
+		return fmt.Errorf("get pending blob: %w", err)
+	}
+	if !ok {
+		return ErrNotFound
+	}
+
+	actualSize, err := s.Objects.StatObject(ctx, pending.ObjectKey)
+	if err != nil {
+		return fmt.Errorf("stat object: %w", err)
+	}
+
+	if s.QuotaBytes > 0 && actualSize != pending.DeclaredSize {
+		used, err := s.Blobs.GetUserStorageUsed(dbCtx, userID)
+		if err != nil {
+			return fmt.Errorf("get storage used: %w", err)
+		}
+		// used already includes the pending blob's declared size — replace it with actual.
+		if used-pending.DeclaredSize+actualSize > s.QuotaBytes {
+			_ = s.Objects.RemoveObject(ctx, pending.ObjectKey)
+			return ErrQuotaExceeded
+		}
+	}
+
+	confirmed, err := s.Blobs.ConfirmBlobUploadWithSize(dbCtx, blobID, userID, actualSize)
 	if err != nil {
 		return fmt.Errorf("confirm upload: %w", err)
 	}
-	if !ok {
+	if !confirmed {
 		return ErrNotFound
 	}
 	return nil

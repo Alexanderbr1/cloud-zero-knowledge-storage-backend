@@ -37,11 +37,11 @@ func NewRouter(d Deps) chi.Router {
 	r.Get("/health", health())
 
 	r.Route("/auth", func(r chi.Router) {
-		r.Post("/register", register(d))
+		r.With(loginRL).Post("/register", register(d))
 		r.With(loginRL).Post("/login/init", loginInit(d))
 		r.With(loginRL).Post("/login/finalize", loginFinalize(d))
-		r.Post("/refresh", refresh(d))
-		r.Post("/logout", logout(d))
+		r.With(loginRL).Post("/refresh", refresh(d))
+		r.With(loginRL).Post("/logout", logout(d))
 	})
 
 	r.Group(func(r chi.Router) {

@@ -177,11 +177,27 @@ func scanSearchBlobs(rows pgx.Rows, userID uuid.UUID) ([]storageuc.SearchBlobRec
 	return out, rows.Err()
 }
 
-func (s *Storage) ConfirmBlobUpload(ctx context.Context, blobID, userID uuid.UUID) (bool, error) {
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE stored_blobs SET uploaded_at = NOW()
+func (s *Storage) GetPendingBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (storageuc.PendingBlobMeta, bool, error) {
+	var m storageuc.PendingBlobMeta
+	err := s.pool.QueryRow(ctx,
+		`SELECT object_key, file_size FROM stored_blobs
 		 WHERE id = $1 AND user_id = $2 AND uploaded_at IS NULL AND deleted_at IS NULL`,
 		blobID, userID,
+	).Scan(&m.ObjectKey, &m.DeclaredSize)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return storageuc.PendingBlobMeta{}, false, nil
+	}
+	if err != nil {
+		return storageuc.PendingBlobMeta{}, false, err
+	}
+	return m, true, nil
+}
+
+func (s *Storage) ConfirmBlobUploadWithSize(ctx context.Context, blobID, userID uuid.UUID, actualSize int64) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE stored_blobs SET uploaded_at = NOW(), file_size = $3
+		 WHERE id = $1 AND user_id = $2 AND uploaded_at IS NULL AND deleted_at IS NULL`,
+		blobID, userID, actualSize,
 	)
 	if err != nil {
 		return false, err

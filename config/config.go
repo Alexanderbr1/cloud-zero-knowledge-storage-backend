@@ -30,10 +30,11 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	ReadTimeout     time.Duration
-	WriteTimeout    time.Duration
-	IdleTimeout     time.Duration
-	ShutdownTimeout time.Duration
+	ReadHeaderTimeout time.Duration
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	IdleTimeout       time.Duration
+	ShutdownTimeout   time.Duration
 }
 
 type JWTConfig struct {
@@ -98,10 +99,11 @@ func (l *loader) build() Config {
 
 func (l *loader) buildServer() ServerConfig {
 	return ServerConfig{
-		ReadTimeout:     l.requirePosDuration("HTTP_READ_TIMEOUT", 35*time.Minute),
-		WriteTimeout:    l.requirePosDuration("HTTP_WRITE_TIMEOUT", 35*time.Minute),
-		IdleTimeout:     l.requirePosDuration("HTTP_IDLE_TIMEOUT", 120*time.Second),
-		ShutdownTimeout: l.requirePosDuration("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second),
+		ReadHeaderTimeout: l.requirePosDuration("HTTP_READ_HEADER_TIMEOUT", 10*time.Second),
+		ReadTimeout:       l.requirePosDuration("HTTP_READ_TIMEOUT", 35*time.Minute),
+		WriteTimeout:      l.requirePosDuration("HTTP_WRITE_TIMEOUT", 35*time.Minute),
+		IdleTimeout:       l.requirePosDuration("HTTP_IDLE_TIMEOUT", 120*time.Second),
+		ShutdownTimeout:   l.requirePosDuration("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second),
 	}
 }
 
@@ -118,7 +120,7 @@ func (l *loader) buildJWT() JWTConfig {
 }
 
 func (l *loader) buildRefreshCookie() RefreshCookieConfig {
-	sameSite, err := parseSameSite(envStr("REFRESH_COOKIE_SAMESITE", "lax"))
+	sameSite, err := parseSameSite(envStr("REFRESH_COOKIE_SAMESITE", "strict"))
 	if err != nil {
 		l.errs = append(l.errs, "REFRESH_COOKIE_SAMESITE: "+err.Error())
 		sameSite = http.SameSiteLaxMode
@@ -127,10 +129,33 @@ func (l *loader) buildRefreshCookie() RefreshCookieConfig {
 	if sameSite == http.SameSiteNoneMode && !secure {
 		l.errs = append(l.errs, "REFRESH_COOKIE_SAMESITE=none requires REFRESH_COOKIE_SECURE=true")
 	}
+
+	// Use __Host- prefix in secure mode: forces Secure, Path=/, no Domain (per RFC 6265bis).
+	// In dev (Secure=false) browsers reject __Host- cookies, so fall back to a plain name.
+	defaultName := "refresh_token"
+	if secure {
+		defaultName = "__Host-refresh_token"
+	}
+	name := envStr("REFRESH_COOKIE_NAME", defaultName)
+	path := envStr("REFRESH_COOKIE_PATH", "/")
+	domain := envStr("REFRESH_COOKIE_DOMAIN", "")
+
+	if strings.HasPrefix(name, "__Host-") {
+		if !secure {
+			l.errs = append(l.errs, "REFRESH_COOKIE_NAME: __Host- prefix requires REFRESH_COOKIE_SECURE=true")
+		}
+		if domain != "" {
+			l.errs = append(l.errs, "REFRESH_COOKIE_NAME: __Host- prefix requires REFRESH_COOKIE_DOMAIN to be empty")
+		}
+		if path != "/" {
+			l.errs = append(l.errs, "REFRESH_COOKIE_NAME: __Host- prefix requires REFRESH_COOKIE_PATH=/")
+		}
+	}
+
 	return RefreshCookieConfig{
-		Name:     envStr("REFRESH_COOKIE_NAME", "refresh_token"),
-		Path:     envStr("REFRESH_COOKIE_PATH", "/"),
-		Domain:   envStr("REFRESH_COOKIE_DOMAIN", ""),
+		Name:     name,
+		Path:     path,
+		Domain:   domain,
 		Secure:   secure,
 		SameSite: sameSite,
 	}

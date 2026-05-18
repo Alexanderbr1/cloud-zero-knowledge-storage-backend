@@ -78,7 +78,6 @@ func (s *Store) EnsureBucket(ctx context.Context) error {
 }
 
 func (s *Store) PresignedPutObject(ctx context.Context, objectKey string, expiry time.Duration) (*url.URL, error) {
-	// Content-Type не входит в подпись — клиент может передать любой (часто application/octet-stream для ciphertext).
 	return s.presignClient.PresignedPutObject(ctx, s.bucket, objectKey, expiry)
 }
 
@@ -86,12 +85,21 @@ func (s *Store) PresignedGetObject(ctx context.Context, objectKey string, expiry
 	return s.presignClient.PresignedGetObject(ctx, s.bucket, objectKey, expiry, nil)
 }
 
+// StatObject returns the actual size of an uploaded object.
+// Used in ConfirmUpload to verify the real file size against the declared value.
+func (s *Store) StatObject(ctx context.Context, objectKey string) (int64, error) {
+	info, err := s.client.StatObject(ctx, s.bucket, objectKey, minio.StatObjectOptions{})
+	if err != nil {
+		return 0, err
+	}
+	return info.Size, nil
+}
+
 func (s *Store) RemoveObject(ctx context.Context, objectKey string) error {
 	err := s.client.RemoveObject(ctx, s.bucket, objectKey, minio.RemoveObjectOptions{})
 	if err == nil {
 		return nil
 	}
-	// Идемпотентность: объект уже отсутствует (например, не успели залить после presign).
 	var resp minio.ErrorResponse
 	if errors.As(err, &resp) && (resp.Code == "NoSuchKey" || resp.StatusCode == http.StatusNotFound) {
 		return nil
