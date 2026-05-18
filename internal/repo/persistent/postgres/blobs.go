@@ -18,7 +18,7 @@ var _ storageuc.BlobTrashRepo = (*Storage)(nil)
 func (s *Storage) GetUserStorageUsed(ctx context.Context, userID uuid.UUID) (int64, error) {
 	var total int64
 	err := s.pool.QueryRow(ctx,
-		`SELECT COALESCE(SUM(file_size), 0) FROM stored_blobs WHERE user_id = $1 AND deleted_at IS NULL`,
+		`SELECT COALESCE(SUM(file_size), 0) FROM stored_blobs WHERE user_id = $1`,
 		userID,
 	).Scan(&total)
 	return total, err
