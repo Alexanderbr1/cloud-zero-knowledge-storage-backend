@@ -102,7 +102,7 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       SMTP_FROM: ${SMTP_FROM:-}
     ports:
-      - "127.0.0.1:8080:8080"
+      - "8080:8080"
     restart: unless-stopped
 
 volumes:
