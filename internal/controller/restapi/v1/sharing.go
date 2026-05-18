@@ -111,6 +111,7 @@ func createShare(d Deps) http.HandlerFunc {
 			writeSharingErr(w, err, d.Logger)
 			return
 		}
+		d.Audit.LogAsync(r.Context(), auditEvent(ownerID, entity.AuditFileShared, realIP(r), r.Header.Get("User-Agent"), &blobID, in.RecipientEmail))
 		restapi.WriteJSON(w, http.StatusCreated, shareToDTO(share, "", ""))
 	}
 }
@@ -194,6 +195,7 @@ func revokeShare(d Deps) http.HandlerFunc {
 			writeSharingErr(w, err, d.Logger)
 			return
 		}
+		d.Audit.LogAsync(r.Context(), auditEvent(ownerID, entity.AuditFileShareRevoked, realIP(r), r.Header.Get("User-Agent"), &shareID, ""))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

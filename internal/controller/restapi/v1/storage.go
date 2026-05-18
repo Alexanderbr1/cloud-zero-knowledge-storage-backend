@@ -20,9 +20,9 @@ import (
 type BlobService interface {
 	GetStorageUsage(ctx context.Context, userID uuid.UUID) (storageuc.StorageUsage, error)
 	PresignPut(ctx context.Context, p storageuc.PresignPutParams) (*storageuc.PresignPutResult, error)
-	ConfirmUpload(ctx context.Context, userID, blobID uuid.UUID) error
+	ConfirmUpload(ctx context.Context, userID, blobID uuid.UUID) (fileName, folderName string, err error)
 	PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*storageuc.PresignGetResult, error)
-	DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error
+	DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) (string, error)
 	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
 	ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folderID *uuid.UUID) ([]entity.Blob, error)
 	RenameBlob(ctx context.Context, userID, blobID uuid.UUID, name string) error
@@ -122,6 +122,7 @@ func storagePresignGet(d Deps) http.HandlerFunc {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
+		d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFileDownloaded, realIP(r), r.Header.Get("User-Agent"), &blobID, out.FileName))
 		restapi.WriteJSON(w, http.StatusOK, dto.PresignGetResponse{
 			BlobID:           out.BlobID.String(),
 			DownloadURL:      out.DownloadURL,
@@ -145,10 +146,16 @@ func storageConfirmUpload(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid blob_id")
 			return
 		}
-		if err := d.Blobs.ConfirmUpload(r.Context(), uid, blobID); err != nil {
+		fileName, folderName, err := d.Blobs.ConfirmUpload(r.Context(), uid, blobID)
+		if err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
+		resourceName := fileName
+		if folderName != "" {
+			resourceName = fileName + " (в папке: " + folderName + ")"
+		}
+		d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFileUploaded, realIP(r), r.Header.Get("User-Agent"), &blobID, resourceName))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -164,10 +171,12 @@ func storageDeleteBlob(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid blob_id")
 			return
 		}
-		if err := d.Blobs.DeleteBlob(r.Context(), uid, blobID); err != nil {
+		fileName, err := d.Blobs.DeleteBlob(r.Context(), uid, blobID)
+		if err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
+		d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFileDeleted, realIP(r), r.Header.Get("User-Agent"), &blobID, fileName))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -256,6 +265,7 @@ func renameBlob(d Deps) http.HandlerFunc {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
+		d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFileRenamed, realIP(r), r.Header.Get("User-Agent"), &blobID, name))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

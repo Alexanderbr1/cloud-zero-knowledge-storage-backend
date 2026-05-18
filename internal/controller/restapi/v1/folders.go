@@ -17,13 +17,13 @@ import (
 )
 
 type FolderService interface {
-	CreateFolder(ctx context.Context, p storageuc.CreateFolderParams) (entity.Folder, error)
+	CreateFolder(ctx context.Context, p storageuc.CreateFolderParams) (entity.Folder, string, error)
 	GetFolder(ctx context.Context, userID, folderID uuid.UUID) (entity.Folder, error)
 	ListFolders(ctx context.Context, userID uuid.UUID, parentID *uuid.UUID) ([]entity.Folder, error)
 	RenameFolder(ctx context.Context, userID, folderID uuid.UUID, name string) (entity.Folder, error)
-	MoveFolder(ctx context.Context, p storageuc.MoveFolderParams) error
-	DeleteFolder(ctx context.Context, userID, folderID uuid.UUID) error
-	MoveBlob(ctx context.Context, userID, blobID uuid.UUID, folderID *uuid.UUID) error
+	MoveFolder(ctx context.Context, p storageuc.MoveFolderParams) (storageuc.FolderMoveInfo, error)
+	DeleteFolder(ctx context.Context, userID, folderID uuid.UUID) (string, error)
+	MoveBlob(ctx context.Context, userID, blobID uuid.UUID, folderID *uuid.UUID) (storageuc.MoveBlobInfo, error)
 }
 
 func createFolder(d Deps) http.HandlerFunc {
@@ -55,7 +55,7 @@ func createFolder(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "name must not be blank")
 			return
 		}
-		folder, err := d.Folders.CreateFolder(r.Context(), storageuc.CreateFolderParams{
+		folder, parentFolderName, err := d.Folders.CreateFolder(r.Context(), storageuc.CreateFolderParams{
 			UserID:   uid,
 			ParentID: parentID,
 			Name:     name,
@@ -64,6 +64,12 @@ func createFolder(d Deps) http.HandlerFunc {
 			writeFolderErr(w, err, d.Logger)
 			return
 		}
+		folderID := folder.ID
+		resourceName := folder.Name
+		if parentFolderName != "" {
+			resourceName = folder.Name + " (в папке: " + parentFolderName + ")"
+		}
+		d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFolderCreated, realIP(r), r.Header.Get("User-Agent"), &folderID, resourceName))
 		restapi.WriteJSON(w, http.StatusCreated, folderToDTO(folder))
 	}
 }
@@ -146,6 +152,8 @@ func renameFolder(d Deps) http.HandlerFunc {
 			writeFolderErr(w, err, d.Logger)
 			return
 		}
+		fid := folder.ID
+		d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFolderRenamed, realIP(r), r.Header.Get("User-Agent"), &fid, folder.Name))
 		restapi.WriteJSON(w, http.StatusOK, folderToDTO(folder))
 	}
 }
@@ -175,14 +183,25 @@ func moveFolder(d Deps) http.HandlerFunc {
 			}
 			newParentID = &parsed
 		}
-		if err := d.Folders.MoveFolder(r.Context(), storageuc.MoveFolderParams{
+		info, err := d.Folders.MoveFolder(r.Context(), storageuc.MoveFolderParams{
 			FolderID:    folderID,
 			UserID:      uid,
 			NewParentID: newParentID,
-		}); err != nil {
+		})
+		if err != nil {
 			writeFolderErr(w, err, d.Logger)
 			return
 		}
+		src := info.SrcFolderName
+		if src == "" {
+			src = "/"
+		}
+		dst := info.DstFolderName
+		if dst == "" {
+			dst = "/"
+		}
+		resourceName := info.FolderName + " (" + src + " → " + dst + ")"
+		d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFolderMoved, realIP(r), r.Header.Get("User-Agent"), &folderID, resourceName))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -198,10 +217,12 @@ func deleteFolder(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid folder_id")
 			return
 		}
-		if err := d.Folders.DeleteFolder(r.Context(), uid, folderID); err != nil {
+		name, err := d.Folders.DeleteFolder(r.Context(), uid, folderID)
+		if err != nil {
 			writeFolderErr(w, err, d.Logger)
 			return
 		}
+		d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFolderDeleted, realIP(r), r.Header.Get("User-Agent"), &folderID, name))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -231,10 +252,21 @@ func moveBlob(d Deps) http.HandlerFunc {
 			}
 			folderID = &parsed
 		}
-		if err := d.Folders.MoveBlob(r.Context(), uid, blobID, folderID); err != nil {
+		info, err := d.Folders.MoveBlob(r.Context(), uid, blobID, folderID)
+		if err != nil {
 			writeFolderErr(w, err, d.Logger)
 			return
 		}
+		src := info.SrcFolderName
+		if src == "" {
+			src = "/"
+		}
+		dst := info.DstFolderName
+		if dst == "" {
+			dst = "/"
+		}
+		resourceName := info.FileName + " (" + src + " → " + dst + ")"
+		d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFileMoved, realIP(r), r.Header.Get("User-Agent"), &blobID, resourceName))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

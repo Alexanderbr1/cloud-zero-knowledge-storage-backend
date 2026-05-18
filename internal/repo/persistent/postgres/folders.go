@@ -213,24 +213,24 @@ func (s *Storage) TrashFolder(ctx context.Context, folderID, userID uuid.UUID) (
 // RestoreFolder restores a trashed folder and its entire subtree.
 // The root folder is placed back under its original parent; if that parent is
 // also trashed or gone, the folder is restored to the root level.
-func (s *Storage) RestoreFolder(ctx context.Context, folderID, userID uuid.UUID) (bool, error) {
+func (s *Storage) RestoreFolder(ctx context.Context, folderID, userID uuid.UUID) (name string, ok bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	var originalParentID *uuid.UUID
 	err = tx.QueryRow(ctx,
-		`SELECT parent_id FROM folders
+		`SELECT parent_id, name FROM folders
 		 WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL`,
 		folderID, userID,
-	).Scan(&originalParentID)
+	).Scan(&originalParentID, &name)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		return "", false, nil
 	}
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 
 	// Collect all folder IDs in the subtree (traversing even trashed children via parent_id).
@@ -243,11 +243,11 @@ func (s *Storage) RestoreFolder(ctx context.Context, folderID, userID uuid.UUID)
 		SELECT id FROM subtree
 	`, folderID)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	ids, err := collectUUIDs(rows)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 
 	// Verify the original parent still exists and is not trashed; fall back to root.
@@ -258,7 +258,7 @@ func (s *Storage) RestoreFolder(ctx context.Context, folderID, userID uuid.UUID)
 			`SELECT EXISTS(SELECT 1 FROM folders WHERE id = $1 AND deleted_at IS NULL)`,
 			*originalParentID,
 		).Scan(&parentOK); err != nil {
-			return false, err
+			return "", false, err
 		}
 		if !parentOK {
 			restoredParentID = nil
@@ -272,7 +272,7 @@ func (s *Storage) RestoreFolder(ctx context.Context, folderID, userID uuid.UUID)
 		WHERE id = ANY($2)`,
 		folderID, ids, restoredParentID,
 	); err != nil {
-		return false, err
+		return "", false, err
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -281,30 +281,30 @@ func (s *Storage) RestoreFolder(ctx context.Context, folderID, userID uuid.UUID)
 		WHERE folder_id = ANY($1) AND deleted_at IS NOT NULL`,
 		ids,
 	); err != nil {
-		return false, err
+		return "", false, err
 	}
 
-	return true, tx.Commit(ctx)
+	return name, true, tx.Commit(ctx)
 }
 
 // HardDeleteFolder permanently deletes a trashed folder subtree and returns
 // the object keys of all contained blobs for MinIO cleanup.
-func (s *Storage) HardDeleteFolder(ctx context.Context, folderID, userID uuid.UUID) (objectKeys []string, ok bool, err error) {
+func (s *Storage) HardDeleteFolder(ctx context.Context, folderID, userID uuid.UUID) (objectKeys []string, name string, ok bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	var owned bool
-	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM folders WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL)`,
+	err = tx.QueryRow(ctx,
+		`SELECT name FROM folders WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL`,
 		folderID, userID,
-	).Scan(&owned); err != nil {
-		return nil, false, err
+	).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, "", false, nil
 	}
-	if !owned {
-		return nil, false, nil
+	if err != nil {
+		return nil, "", false, err
 	}
 
 	rows, err := tx.Query(ctx, `
@@ -316,11 +316,11 @@ func (s *Storage) HardDeleteFolder(ctx context.Context, folderID, userID uuid.UU
 		SELECT id FROM subtree
 	`, folderID)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
 	ids, err := collectUUIDs(rows)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
 
 	blobRows, err := tx.Query(ctx,
@@ -328,26 +328,26 @@ func (s *Storage) HardDeleteFolder(ctx context.Context, folderID, userID uuid.UU
 		ids,
 	)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
 	objectKeys, err = scanObjectKeys(blobRows)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
 
 	// Break parent_id self-references within the set so the bulk DELETE succeeds.
 	if _, err := tx.Exec(ctx,
 		`UPDATE folders SET parent_id = NULL WHERE id = ANY($1)`, ids,
 	); err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
 	if _, err := tx.Exec(ctx,
 		`DELETE FROM folders WHERE id = ANY($1)`, ids,
 	); err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
 
-	return objectKeys, true, tx.Commit(ctx)
+	return objectKeys, name, true, tx.Commit(ctx)
 }
 
 func (s *Storage) ListTrashedFolders(ctx context.Context, userID uuid.UUID) ([]entity.Folder, error) {

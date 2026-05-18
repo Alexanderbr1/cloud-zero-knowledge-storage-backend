@@ -19,6 +19,7 @@ import (
 	rediscache "cloud-backend/internal/repo/cache/redis"
 	"cloud-backend/internal/repo/persistent/postgres"
 	miniostore "cloud-backend/internal/repo/storage/minio"
+	audituc "cloud-backend/internal/usecase/audit"
 	authuc "cloud-backend/internal/usecase/auth"
 	sharinguc "cloud-backend/internal/usecase/sharing"
 	storageuc "cloud-backend/internal/usecase/storage"
@@ -106,6 +107,11 @@ func wireDeps(
 		From:         cfg.SMTP.From,
 	})
 
+	auditSvc := &audituc.Service{
+		Repo:   store,
+		Logger: log,
+	}
+
 	authSvc := &authuc.Service{
 		Users:          store,
 		Sessions:       store,
@@ -117,6 +123,7 @@ func wireDeps(
 		SRPSessions:    rediscache.NewSRPSessionStore(redisClient),
 		Logger:         log,
 		Notifier:       mailer,
+		Audit:          auditSvc,
 	}
 
 	storageSvc := &storageuc.Service{
@@ -150,6 +157,7 @@ func wireDeps(
 			Folders:              storageSvc,
 			Trash:                storageSvc,
 			Sharing:              sharingSvc,
+			Audit:                auditSvc,
 			PublicKeyRateLimiter: publicKeyRL,
 			LoginRateLimiter:     loginRL,
 			RefreshCookie:        cfg.RefreshCookie,

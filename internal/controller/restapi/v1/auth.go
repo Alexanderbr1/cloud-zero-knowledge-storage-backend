@@ -11,6 +11,7 @@ import (
 	"cloud-backend/config"
 	"cloud-backend/internal/controller/restapi"
 	"cloud-backend/internal/controller/restapi/v1/dto"
+	"cloud-backend/internal/entity"
 	authuc "cloud-backend/internal/usecase/auth"
 )
 
@@ -103,15 +104,17 @@ func loginFinalize(d Deps) http.HandlerFunc {
 			restapi.WriteValidationError(w, err)
 			return
 		}
+		device := parseDeviceInfo(r)
 		result, err := d.Auth.LoginFinalize(r.Context(), authuc.LoginFinalizeParams{
 			SessionID: in.SessionID,
 			M1:        in.M1,
-			Device:    parseDeviceInfo(r),
+			Device:    device,
 		})
 		if err != nil {
 			writeAuthErr(w, err, d.Logger)
 			return
 		}
+		d.Audit.LogAsync(r.Context(), auditEvent(result.UserID, entity.AuditLoginSuccess, device.IPAddress, device.UserAgent, nil, ""))
 		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, result.Pair, result.M2, result.EncryptedPrivateKey)
 	}
 }

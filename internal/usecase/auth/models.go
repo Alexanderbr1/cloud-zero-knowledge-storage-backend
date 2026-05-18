@@ -74,4 +74,5 @@ type LoginFinalizeResult struct {
 	M2                  string
 	Pair                TokenPair
 	EncryptedPrivateKey []byte
+	UserID              uuid.UUID
 }

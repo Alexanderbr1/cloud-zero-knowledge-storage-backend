@@ -55,6 +55,10 @@ type Notifier interface {
 	NotifyNewLogin(ctx context.Context, toEmail, deviceName, ipAddress string) error
 }
 
+type AuditLogger interface {
+	LogAsync(ctx context.Context, e entity.AuditEvent)
+}
+
 const dbTimeout = 5 * time.Second
 
 func dbCtx(parent context.Context) (context.Context, context.CancelFunc) {
@@ -72,6 +76,7 @@ type Service struct {
 	SRPSessions    SRPSessionManager
 	Logger         zerolog.Logger
 	Notifier       Notifier
+	Audit          AuditLogger
 }
 
 func (s *Service) Register(ctx context.Context, p RegisterParams) (TokenPair, error) {
@@ -152,6 +157,14 @@ func (s *Service) LoginFinalize(ctx context.Context, p LoginFinalizeParams) (Log
 
 	m2Hex, err := entry.Session.VerifyClientProof(entry.AHex, p.M1, entry.Email, entry.SRPSaltHex)
 	if err != nil {
+		if s.Audit != nil {
+			s.Audit.LogAsync(ctx, entity.AuditEvent{
+				UserID:    entry.UserID,
+				EventType: entity.AuditLoginFailed,
+				IPAddress: p.Device.IPAddress,
+				UserAgent: p.Device.UserAgent,
+			})
+		}
 		return LoginFinalizeResult{}, ErrInvalidCredentials
 	}
 
@@ -179,6 +192,7 @@ func (s *Service) LoginFinalize(ctx context.Context, p LoginFinalizeParams) (Log
 		M2:                  m2Hex,
 		Pair:                pair,
 		EncryptedPrivateKey: entry.EncryptedPrivateKey,
+		UserID:              entry.UserID,
 	}, nil
 }
 
@@ -219,7 +233,16 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 		return nil
 	}
 
-	return s.DeviceSessions.RevokeSession(ctx, consumed.DeviceSessionID, consumed.UserID)
+	if err := s.DeviceSessions.RevokeSession(ctx, consumed.DeviceSessionID, consumed.UserID); err != nil {
+		return err
+	}
+	if s.Audit != nil {
+		s.Audit.LogAsync(ctx, entity.AuditEvent{
+			UserID:    consumed.UserID,
+			EventType: entity.AuditLogout,
+		})
+	}
+	return nil
 }
 
 func (s *Service) ListDeviceSessions(ctx context.Context, userID uuid.UUID) ([]entity.DeviceSession, error) {

@@ -32,15 +32,15 @@ type BlobRepo interface {
 	RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error)
 	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
 	ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folderID *uuid.UUID) ([]entity.Blob, error)
-	MoveBlob(ctx context.Context, blobID, userID uuid.UUID, folderID *uuid.UUID) (bool, error)
+	MoveBlob(ctx context.Context, blobID, userID uuid.UUID, folderID *uuid.UUID) (MoveBlobInfo, bool, error)
 	RenameBlob(ctx context.Context, blobID, userID uuid.UUID, name string) (bool, error)
 	SearchBlobs(ctx context.Context, userID uuid.UUID, query string) ([]SearchBlobRecord, error)
-	TrashBlob(ctx context.Context, blobID, userID uuid.UUID) (bool, error)
+	TrashBlob(ctx context.Context, blobID, userID uuid.UUID) (fileName string, ok bool, err error)
 }
 
 type BlobTrashRepo interface {
-	RestoreBlob(ctx context.Context, blobID, userID uuid.UUID) (bool, error)
-	HardDeleteBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error)
+	RestoreBlob(ctx context.Context, blobID, userID uuid.UUID) (fileName string, ok bool, err error)
+	HardDeleteBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey, fileName string, ok bool, err error)
 	ListTrashedBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
 	EmptyTrashedBlobs(ctx context.Context, userID uuid.UUID) ([]string, error)
 	PurgeExpiredBlobs(ctx context.Context, before time.Time) ([]string, error)
@@ -58,8 +58,8 @@ type FolderRepo interface {
 }
 
 type FolderTrashRepo interface {
-	RestoreFolder(ctx context.Context, folderID, userID uuid.UUID) (bool, error)
-	HardDeleteFolder(ctx context.Context, folderID, userID uuid.UUID) (objectKeys []string, ok bool, err error)
+	RestoreFolder(ctx context.Context, folderID, userID uuid.UUID) (name string, ok bool, err error)
+	HardDeleteFolder(ctx context.Context, folderID, userID uuid.UUID) (objectKeys []string, name string, ok bool, err error)
 	ListTrashedFolders(ctx context.Context, userID uuid.UUID) ([]entity.Folder, error)
 	EmptyTrashedFolders(ctx context.Context, userID uuid.UUID) ([]string, error)
 	PurgeExpiredFolders(ctx context.Context, before time.Time) ([]string, error)
@@ -179,53 +179,54 @@ func (s *Service) PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*Pr
 		ContentType:      meta.ContentType,
 		EncryptedFileKey: meta.EncryptedFileKey,
 		FileIV:           meta.FileIV,
+		FileName:         meta.FileName,
 	}, nil
 }
 
-func (s *Service) DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error {
+func (s *Service) DeleteBlob(ctx context.Context, userID, blobID uuid.UUID) (string, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	ok, err := s.Blobs.TrashBlob(dbCtx, blobID, userID)
+	fileName, ok, err := s.Blobs.TrashBlob(dbCtx, blobID, userID)
 	if err != nil {
-		return fmt.Errorf("trash blob: %w", err)
+		return "", fmt.Errorf("trash blob: %w", err)
 	}
 	if !ok {
-		return ErrNotFound
+		return "", ErrNotFound
 	}
-	return nil
+	return fileName, nil
 }
 
-func (s *Service) RestoreBlob(ctx context.Context, userID, blobID uuid.UUID) error {
+func (s *Service) RestoreBlob(ctx context.Context, userID, blobID uuid.UUID) (string, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	ok, err := s.BlobTrash.RestoreBlob(dbCtx, blobID, userID)
+	fileName, ok, err := s.BlobTrash.RestoreBlob(dbCtx, blobID, userID)
 	if err != nil {
-		return fmt.Errorf("restore blob: %w", err)
+		return "", fmt.Errorf("restore blob: %w", err)
 	}
 	if !ok {
-		return ErrNotFound
+		return "", ErrNotFound
 	}
-	return nil
+	return fileName, nil
 }
 
-func (s *Service) HardDeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error {
+func (s *Service) HardDeleteBlob(ctx context.Context, userID, blobID uuid.UUID) (string, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	objectKey, ok, err := s.BlobTrash.HardDeleteBlob(dbCtx, blobID, userID)
+	objectKey, fileName, ok, err := s.BlobTrash.HardDeleteBlob(dbCtx, blobID, userID)
 	if err != nil {
-		return fmt.Errorf("hard delete blob record: %w", err)
+		return "", fmt.Errorf("hard delete blob record: %w", err)
 	}
 	if !ok {
-		return ErrNotFound
+		return "", ErrNotFound
 	}
 
 	if err := s.Objects.RemoveObject(ctx, objectKey); err != nil {
-		return fmt.Errorf("remove object: %w", err)
+		return "", fmt.Errorf("remove object: %w", err)
 	}
-	return nil
+	return fileName, nil
 }
 
 func (s *Service) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error) {
@@ -256,24 +257,31 @@ func (s *Service) ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folde
 	return blobs, nil
 }
 
-func (s *Service) MoveBlob(ctx context.Context, userID, blobID uuid.UUID, folderID *uuid.UUID) error {
+func (s *Service) MoveBlob(ctx context.Context, userID, blobID uuid.UUID, folderID *uuid.UUID) (MoveBlobInfo, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
+	var dstFolderName string
 	if folderID != nil {
-		if err := s.requireFolder(dbCtx, *folderID, userID); err != nil {
-			return err
+		folder, ok, err := s.Folders.GetFolder(dbCtx, *folderID, userID)
+		if err != nil {
+			return MoveBlobInfo{}, fmt.Errorf("get folder: %w", err)
 		}
+		if !ok {
+			return MoveBlobInfo{}, ErrFolderNotFound
+		}
+		dstFolderName = folder.Name
 	}
 
-	ok, err := s.Blobs.MoveBlob(dbCtx, blobID, userID, folderID)
+	info, ok, err := s.Blobs.MoveBlob(dbCtx, blobID, userID, folderID)
 	if err != nil {
-		return fmt.Errorf("move blob: %w", err)
+		return MoveBlobInfo{}, fmt.Errorf("move blob: %w", err)
 	}
 	if !ok {
-		return ErrNotFound
+		return MoveBlobInfo{}, ErrNotFound
 	}
-	return nil
+	info.DstFolderName = dstFolderName
+	return info, nil
 }
 
 func (s *Service) RenameBlob(ctx context.Context, userID, blobID uuid.UUID, name string) error {
@@ -291,21 +299,27 @@ func (s *Service) RenameBlob(ctx context.Context, userID, blobID uuid.UUID, name
 	return nil
 }
 
-func (s *Service) CreateFolder(ctx context.Context, p CreateFolderParams) (entity.Folder, error) {
+func (s *Service) CreateFolder(ctx context.Context, p CreateFolderParams) (entity.Folder, string, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
+	var parentFolderName string
 	if p.ParentID != nil {
-		if err := s.requireFolder(dbCtx, *p.ParentID, p.UserID); err != nil {
-			return entity.Folder{}, err
+		parent, ok, err := s.Folders.GetFolder(dbCtx, *p.ParentID, p.UserID)
+		if err != nil {
+			return entity.Folder{}, "", fmt.Errorf("get parent folder: %w", err)
 		}
+		if !ok {
+			return entity.Folder{}, "", ErrFolderNotFound
+		}
+		parentFolderName = parent.Name
 	}
 
 	f, err := s.Folders.CreateFolder(dbCtx, p)
 	if err != nil {
-		return entity.Folder{}, fmt.Errorf("create folder: %w", err)
+		return entity.Folder{}, "", fmt.Errorf("create folder: %w", err)
 	}
-	return f, nil
+	return f, parentFolderName, nil
 }
 
 func (s *Service) GetFolder(ctx context.Context, userID, folderID uuid.UUID) (entity.Folder, error) {
@@ -350,86 +364,112 @@ func (s *Service) RenameFolder(ctx context.Context, userID, folderID uuid.UUID, 
 	return f, nil
 }
 
-func (s *Service) MoveFolder(ctx context.Context, p MoveFolderParams) error {
+func (s *Service) MoveFolder(ctx context.Context, p MoveFolderParams) (FolderMoveInfo, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	if _, ok, err := s.Folders.GetFolder(dbCtx, p.FolderID, p.UserID); err != nil {
-		return fmt.Errorf("get folder: %w", err)
-	} else if !ok {
-		return ErrFolderNotFound
+	folder, ok, err := s.Folders.GetFolder(dbCtx, p.FolderID, p.UserID)
+	if err != nil {
+		return FolderMoveInfo{}, fmt.Errorf("get folder: %w", err)
+	}
+	if !ok {
+		return FolderMoveInfo{}, ErrFolderNotFound
 	}
 
+	// Resolve current (source) parent folder name — one extra query, but cheap.
+	var srcFolderName string
+	if folder.ParentID != nil {
+		if srcFolder, ok, err := s.Folders.GetFolder(dbCtx, *folder.ParentID, p.UserID); err == nil && ok {
+			srcFolderName = srcFolder.Name
+		}
+	}
+
+	var dstFolderName string
 	if p.NewParentID != nil {
 		if *p.NewParentID == p.FolderID {
-			return ErrFolderCycle
+			return FolderMoveInfo{}, ErrFolderCycle
 		}
 
-		if _, ok, err := s.Folders.GetFolder(dbCtx, *p.NewParentID, p.UserID); err != nil {
-			return fmt.Errorf("get new parent: %w", err)
-		} else if !ok {
-			return ErrFolderNotFound
+		dstFolder, ok, err := s.Folders.GetFolder(dbCtx, *p.NewParentID, p.UserID)
+		if err != nil {
+			return FolderMoveInfo{}, fmt.Errorf("get new parent: %w", err)
 		}
+		if !ok {
+			return FolderMoveInfo{}, ErrFolderNotFound
+		}
+		dstFolderName = dstFolder.Name
 
 		isDesc, err := s.Folders.IsDescendantOf(dbCtx, p.FolderID, *p.NewParentID)
 		if err != nil {
-			return fmt.Errorf("cycle check: %w", err)
+			return FolderMoveInfo{}, fmt.Errorf("cycle check: %w", err)
 		}
 		if isDesc {
-			return ErrFolderCycle
+			return FolderMoveInfo{}, ErrFolderCycle
 		}
 	}
 
 	if err := s.Folders.MoveFolder(dbCtx, p); err != nil {
-		return fmt.Errorf("move folder: %w", err)
+		return FolderMoveInfo{}, fmt.Errorf("move folder: %w", err)
 	}
-	return nil
+	return FolderMoveInfo{
+		FolderName:    folder.Name,
+		SrcFolderName: srcFolderName,
+		DstFolderName: dstFolderName,
+	}, nil
 }
 
-func (s *Service) DeleteFolder(ctx context.Context, userID, folderID uuid.UUID) error {
+func (s *Service) DeleteFolder(ctx context.Context, userID, folderID uuid.UUID) (string, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	ok, err := s.Folders.TrashFolder(dbCtx, folderID, userID)
+	folder, ok, err := s.Folders.GetFolder(dbCtx, folderID, userID)
 	if err != nil {
-		return fmt.Errorf("trash folder: %w", err)
+		return "", fmt.Errorf("get folder: %w", err)
 	}
 	if !ok {
-		return ErrFolderNotFound
+		return "", ErrFolderNotFound
 	}
-	return nil
+
+	trashed, err := s.Folders.TrashFolder(dbCtx, folderID, userID)
+	if err != nil {
+		return "", fmt.Errorf("trash folder: %w", err)
+	}
+	if !trashed {
+		return "", ErrFolderNotFound
+	}
+	return folder.Name, nil
 }
 
-func (s *Service) RestoreFolder(ctx context.Context, userID, folderID uuid.UUID) error {
+func (s *Service) RestoreFolder(ctx context.Context, userID, folderID uuid.UUID) (string, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	ok, err := s.FolderTrash.RestoreFolder(dbCtx, folderID, userID)
+	name, ok, err := s.FolderTrash.RestoreFolder(dbCtx, folderID, userID)
 	if err != nil {
-		return fmt.Errorf("restore folder: %w", err)
+		return "", fmt.Errorf("restore folder: %w", err)
 	}
 	if !ok {
-		return ErrFolderNotFound
+		return "", ErrFolderNotFound
 	}
-	return nil
+	return name, nil
 }
 
-func (s *Service) HardDeleteFolder(ctx context.Context, userID, folderID uuid.UUID) error {
+func (s *Service) HardDeleteFolder(ctx context.Context, userID, folderID uuid.UUID) (string, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	objectKeys, ok, err := s.FolderTrash.HardDeleteFolder(dbCtx, folderID, userID)
+	objectKeys, name, ok, err := s.FolderTrash.HardDeleteFolder(dbCtx, folderID, userID)
 	if err != nil {
-		return fmt.Errorf("hard delete folder: %w", err)
+		return "", fmt.Errorf("hard delete folder: %w", err)
 	}
 	if !ok {
-		return ErrFolderNotFound
+		return "", ErrFolderNotFound
 	}
 
 	for _, key := range objectKeys {
 		_ = s.Objects.RemoveObject(ctx, key) // best-effort
 	}
-	return nil
+	return name, nil
 }
 
 func (s *Service) ListTrash(ctx context.Context, userID uuid.UUID) (TrashResult, error) {
@@ -483,43 +523,51 @@ func (s *Service) EmptyTrash(ctx context.Context, userID uuid.UUID) error {
 	return nil
 }
 
-func (s *Service) ConfirmUpload(ctx context.Context, userID, blobID uuid.UUID) error {
+func (s *Service) ConfirmUpload(ctx context.Context, userID, blobID uuid.UUID) (fileName, folderName string, err error) {
 	dbCtx, cancel := context.WithTimeout(ctx, dbTimeout)
 	defer cancel()
 
 	pending, ok, err := s.Blobs.GetPendingBlobMeta(dbCtx, blobID, userID)
 	if err != nil {
-		return fmt.Errorf("get pending blob: %w", err)
+		return "", "", fmt.Errorf("get pending blob: %w", err)
 	}
 	if !ok {
-		return ErrNotFound
+		return "", "", ErrNotFound
 	}
 
 	actualSize, err := s.Objects.StatObject(ctx, pending.ObjectKey)
 	if err != nil {
-		return fmt.Errorf("stat object: %w", err)
+		return "", "", fmt.Errorf("stat object: %w", err)
 	}
 
 	if s.QuotaBytes > 0 && actualSize != pending.DeclaredSize {
 		used, err := s.Blobs.GetUserStorageUsed(dbCtx, userID)
 		if err != nil {
-			return fmt.Errorf("get storage used: %w", err)
+			return "", "", fmt.Errorf("get storage used: %w", err)
 		}
 		// used already includes the pending blob's declared size — replace it with actual.
 		if used-pending.DeclaredSize+actualSize > s.QuotaBytes {
 			_ = s.Objects.RemoveObject(ctx, pending.ObjectKey)
-			return ErrQuotaExceeded
+			return "", "", ErrQuotaExceeded
 		}
 	}
 
 	confirmed, err := s.Blobs.ConfirmBlobUploadWithSize(dbCtx, blobID, userID, actualSize)
 	if err != nil {
-		return fmt.Errorf("confirm upload: %w", err)
+		return "", "", fmt.Errorf("confirm upload: %w", err)
 	}
 	if !confirmed {
-		return ErrNotFound
+		return "", "", ErrNotFound
 	}
-	return nil
+
+	if pending.FolderID != nil {
+		enrichCtx, enrichCancel := context.WithTimeout(context.Background(), dbTimeout)
+		if folder, ok, ferr := s.Folders.GetFolder(enrichCtx, *pending.FolderID, userID); ferr == nil && ok {
+			folderName = folder.Name
+		}
+		enrichCancel()
+	}
+	return pending.FileName, folderName, nil
 }
 
 func (s *Service) CleanOrphanedBlobs(ctx context.Context, ttl time.Duration) error {

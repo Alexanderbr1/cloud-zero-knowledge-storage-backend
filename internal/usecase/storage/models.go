@@ -28,11 +28,14 @@ type BlobMeta struct {
 	ContentType      string
 	EncryptedFileKey []byte
 	FileIV           []byte
+	FileName         string
 }
 
 type PendingBlobMeta struct {
 	ObjectKey    string
 	DeclaredSize int64
+	FileName     string
+	FolderID     *uuid.UUID
 }
 
 type SearchBlobRecord struct {
@@ -44,6 +47,18 @@ type CreateFolderParams struct {
 	UserID   uuid.UUID
 	ParentID *uuid.UUID
 	Name     string
+}
+
+type MoveBlobInfo struct {
+	FileName      string
+	SrcFolderName string // empty string means root
+	DstFolderName string // empty string means root
+}
+
+type FolderMoveInfo struct {
+	FolderName    string
+	SrcFolderName string // empty string means root
+	DstFolderName string // empty string means root
 }
 
 type MoveFolderParams struct {
@@ -80,6 +95,7 @@ type PresignGetResult struct {
 	ContentType      string
 	EncryptedFileKey []byte
 	FileIV           []byte
+	FileName         string
 }
 
 type SearchParams struct {

@@ -22,6 +22,7 @@ type Deps struct {
 	Folders              FolderService
 	Trash                TrashService
 	Sharing              SharingService
+	Audit                AuditService
 	PublicKeyRateLimiter restapi.RateLimiter
 	LoginRateLimiter     restapi.RateLimiter
 	RefreshCookie        config.RefreshCookieConfig
@@ -94,6 +95,8 @@ func NewRouter(d Deps) chi.Router {
 		})
 
 		r.With(publicKeyRL).Get("/users/public-key", getRecipientPublicKey(d))
+
+		r.Get("/audit", listAuditEvents(d))
 	})
 
 	return r

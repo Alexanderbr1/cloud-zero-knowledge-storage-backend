@@ -63,6 +63,7 @@ func revokeSession(d Deps) http.HandlerFunc {
 			restapi.WriteInternalError(w, d.Logger, err)
 			return
 		}
+		d.Audit.LogAsync(r.Context(), auditEvent(userID, entity.AuditSessionRevoked, realIP(r), r.Header.Get("User-Agent"), &sessionID, ""))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -79,6 +80,7 @@ func revokeOtherSessions(d Deps) http.HandlerFunc {
 			restapi.WriteInternalError(w, d.Logger, err)
 			return
 		}
+		d.Audit.LogAsync(r.Context(), auditEvent(userID, entity.AuditSessionsRevoked, realIP(r), r.Header.Get("User-Agent"), nil, ""))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

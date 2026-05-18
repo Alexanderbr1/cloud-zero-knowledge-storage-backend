@@ -16,10 +16,10 @@ import (
 
 type TrashService interface {
 	ListTrash(ctx context.Context, userID uuid.UUID) (storageuc.TrashResult, error)
-	RestoreBlob(ctx context.Context, userID, blobID uuid.UUID) error
-	HardDeleteBlob(ctx context.Context, userID, blobID uuid.UUID) error
-	RestoreFolder(ctx context.Context, userID, folderID uuid.UUID) error
-	HardDeleteFolder(ctx context.Context, userID, folderID uuid.UUID) error
+	RestoreBlob(ctx context.Context, userID, blobID uuid.UUID) (string, error)
+	HardDeleteBlob(ctx context.Context, userID, blobID uuid.UUID) (string, error)
+	RestoreFolder(ctx context.Context, userID, folderID uuid.UUID) (string, error)
+	HardDeleteFolder(ctx context.Context, userID, folderID uuid.UUID) (string, error)
 	EmptyTrash(ctx context.Context, userID uuid.UUID) error
 }
 
@@ -49,10 +49,12 @@ func trashRestoreBlob(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid blob_id")
 			return
 		}
-		if err := d.Trash.RestoreBlob(r.Context(), uid, blobID); err != nil {
+		fileName, err := d.Trash.RestoreBlob(r.Context(), uid, blobID)
+		if err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
+		d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFileRestored, realIP(r), r.Header.Get("User-Agent"), &blobID, fileName))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -68,10 +70,12 @@ func trashDeleteBlob(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid blob_id")
 			return
 		}
-		if err := d.Trash.HardDeleteBlob(r.Context(), uid, blobID); err != nil {
+		fileName, err := d.Trash.HardDeleteBlob(r.Context(), uid, blobID)
+		if err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
+		d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFileHardDeleted, realIP(r), r.Header.Get("User-Agent"), &blobID, fileName))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -87,10 +91,12 @@ func trashRestoreFolder(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid folder_id")
 			return
 		}
-		if err := d.Trash.RestoreFolder(r.Context(), uid, folderID); err != nil {
+		name, err := d.Trash.RestoreFolder(r.Context(), uid, folderID)
+		if err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
+		d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFolderRestored, realIP(r), r.Header.Get("User-Agent"), &folderID, name))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -106,10 +112,12 @@ func trashDeleteFolder(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid folder_id")
 			return
 		}
-		if err := d.Trash.HardDeleteFolder(r.Context(), uid, folderID); err != nil {
+		name, err := d.Trash.HardDeleteFolder(r.Context(), uid, folderID)
+		if err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return
 		}
+		d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFolderHardDeleted, realIP(r), r.Header.Get("User-Agent"), &folderID, name))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
