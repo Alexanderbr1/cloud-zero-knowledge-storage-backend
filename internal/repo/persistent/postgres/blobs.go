@@ -316,18 +316,26 @@ func (s *Storage) ListTrashedBlobs(ctx context.Context, userID uuid.UUID) ([]ent
 	return scanBlobs(rows, userID)
 }
 
-func (s *Storage) EmptyTrashedBlobs(ctx context.Context, userID uuid.UUID) ([]string, error) {
+func (s *Storage) EmptyTrashedBlobs(ctx context.Context, userID uuid.UUID) ([]storageuc.EmptiedBlob, error) {
 	rows, err := s.pool.Query(ctx,
 		`DELETE FROM stored_blobs
 		 WHERE user_id = $1 AND deleted_at IS NOT NULL
-		 RETURNING object_key`,
+		 RETURNING id, file_name, object_key`,
 		userID,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanObjectKeys(rows)
+	var result []storageuc.EmptiedBlob
+	for rows.Next() {
+		var b storageuc.EmptiedBlob
+		if err := rows.Scan(&b.ID, &b.FileName, &b.ObjectKey); err != nil {
+			return nil, err
+		}
+		result = append(result, b)
+	}
+	return result, rows.Err()
 }
 
 func (s *Storage) PurgeExpiredBlobs(ctx context.Context, before time.Time) ([]string, error) {

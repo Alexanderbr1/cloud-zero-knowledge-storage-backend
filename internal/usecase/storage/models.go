@@ -11,6 +11,17 @@ type TrashResult struct {
 	Folders []entity.Folder
 }
 
+type EmptiedBlob struct {
+	ID        uuid.UUID
+	FileName  string
+	ObjectKey string
+}
+
+type EmptiedFolder struct {
+	ID   uuid.UUID
+	Name string
+}
+
 type RegisterBlobParams struct {
 	ID               uuid.UUID
 	UserID           uuid.UUID

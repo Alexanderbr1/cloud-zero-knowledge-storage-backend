@@ -369,10 +369,10 @@ func (s *Storage) ListTrashedFolders(ctx context.Context, userID uuid.UUID) ([]e
 	return scanFolders(rows)
 }
 
-func (s *Storage) EmptyTrashedFolders(ctx context.Context, userID uuid.UUID) ([]string, error) {
+func (s *Storage) EmptyTrashedFolders(ctx context.Context, userID uuid.UUID) ([]storageuc.EmptiedFolder, []string, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
@@ -385,25 +385,39 @@ func (s *Storage) EmptyTrashedFolders(ctx context.Context, userID uuid.UUID) ([]
 		userID,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	objectKeys, err := scanObjectKeys(blobRows)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if _, err := tx.Exec(ctx,
 		`UPDATE folders SET parent_id = NULL WHERE user_id = $1 AND deleted_at IS NOT NULL`, userID,
 	); err != nil {
-		return nil, err
-	}
-	if _, err := tx.Exec(ctx,
-		`DELETE FROM folders WHERE user_id = $1 AND deleted_at IS NOT NULL`, userID,
-	); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return objectKeys, tx.Commit(ctx)
+	folderRows, err := tx.Query(ctx,
+		`DELETE FROM folders WHERE user_id = $1 AND deleted_at IS NOT NULL RETURNING id, name`,
+		userID,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	var folders []storageuc.EmptiedFolder
+	for folderRows.Next() {
+		var f storageuc.EmptiedFolder
+		if err := folderRows.Scan(&f.ID, &f.Name); err != nil {
+			return nil, nil, err
+		}
+		folders = append(folders, f)
+	}
+	if err := folderRows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	return folders, objectKeys, tx.Commit(ctx)
 }
 
 func (s *Storage) PurgeExpiredFolders(ctx context.Context, before time.Time) ([]string, error) {

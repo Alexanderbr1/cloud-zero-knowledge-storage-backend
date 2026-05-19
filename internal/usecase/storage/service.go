@@ -42,7 +42,7 @@ type BlobTrashRepo interface {
 	RestoreBlob(ctx context.Context, blobID, userID uuid.UUID) (fileName string, ok bool, err error)
 	HardDeleteBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey, fileName string, ok bool, err error)
 	ListTrashedBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
-	EmptyTrashedBlobs(ctx context.Context, userID uuid.UUID) ([]string, error)
+	EmptyTrashedBlobs(ctx context.Context, userID uuid.UUID) ([]EmptiedBlob, error)
 	PurgeExpiredBlobs(ctx context.Context, before time.Time) ([]string, error)
 }
 
@@ -61,7 +61,7 @@ type FolderTrashRepo interface {
 	RestoreFolder(ctx context.Context, folderID, userID uuid.UUID) (name string, ok bool, err error)
 	HardDeleteFolder(ctx context.Context, folderID, userID uuid.UUID) (objectKeys []string, name string, ok bool, err error)
 	ListTrashedFolders(ctx context.Context, userID uuid.UUID) ([]entity.Folder, error)
-	EmptyTrashedFolders(ctx context.Context, userID uuid.UUID) ([]string, error)
+	EmptyTrashedFolders(ctx context.Context, userID uuid.UUID) ([]EmptiedFolder, []string, error)
 	PurgeExpiredFolders(ctx context.Context, before time.Time) ([]string, error)
 }
 
@@ -503,24 +503,27 @@ func (s *Service) ListTrash(ctx context.Context, userID uuid.UUID) (TrashResult,
 	return TrashResult{Blobs: blobs, Folders: folders}, nil
 }
 
-func (s *Service) EmptyTrash(ctx context.Context, userID uuid.UUID) error {
+func (s *Service) EmptyTrash(ctx context.Context, userID uuid.UUID) ([]EmptiedBlob, []EmptiedFolder, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	blobKeys, err := s.BlobTrash.EmptyTrashedBlobs(dbCtx, userID)
+	blobs, err := s.BlobTrash.EmptyTrashedBlobs(dbCtx, userID)
 	if err != nil {
-		return fmt.Errorf("empty trashed blobs: %w", err)
+		return nil, nil, fmt.Errorf("empty trashed blobs: %w", err)
 	}
 
-	folderBlobKeys, err := s.FolderTrash.EmptyTrashedFolders(dbCtx, userID)
+	folders, folderBlobKeys, err := s.FolderTrash.EmptyTrashedFolders(dbCtx, userID)
 	if err != nil {
-		return fmt.Errorf("empty trashed folders: %w", err)
+		return nil, nil, fmt.Errorf("empty trashed folders: %w", err)
 	}
 
-	for _, key := range append(blobKeys, folderBlobKeys...) {
+	for _, b := range blobs {
+		_ = s.Objects.RemoveObject(ctx, b.ObjectKey)
+	}
+	for _, key := range folderBlobKeys {
 		_ = s.Objects.RemoveObject(ctx, key)
 	}
-	return nil
+	return blobs, folders, nil
 }
 
 func (s *Service) ConfirmUpload(ctx context.Context, userID, blobID uuid.UUID) (fileName, folderName string, err error) {

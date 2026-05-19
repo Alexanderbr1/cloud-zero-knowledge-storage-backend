@@ -20,7 +20,7 @@ type TrashService interface {
 	HardDeleteBlob(ctx context.Context, userID, blobID uuid.UUID) (string, error)
 	RestoreFolder(ctx context.Context, userID, folderID uuid.UUID) (string, error)
 	HardDeleteFolder(ctx context.Context, userID, folderID uuid.UUID) (string, error)
-	EmptyTrash(ctx context.Context, userID uuid.UUID) error
+	EmptyTrash(ctx context.Context, userID uuid.UUID) ([]storageuc.EmptiedBlob, []storageuc.EmptiedFolder, error)
 }
 
 func trashList(d Deps) http.HandlerFunc {
@@ -128,9 +128,20 @@ func trashEmpty(d Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		if err := d.Trash.EmptyTrash(r.Context(), uid); err != nil {
+		blobs, folders, err := d.Trash.EmptyTrash(r.Context(), uid)
+		if err != nil {
 			restapi.WriteInternalError(w, d.Logger, err)
 			return
+		}
+		ip := realIP(r)
+		ua := r.Header.Get("User-Agent")
+		for _, b := range blobs {
+			blobID := b.ID
+			d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFileHardDeleted, ip, ua, &blobID, b.FileName))
+		}
+		for _, f := range folders {
+			folderID := f.ID
+			d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFolderHardDeleted, ip, ua, &folderID, f.Name))
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
