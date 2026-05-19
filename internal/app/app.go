@@ -21,6 +21,7 @@ import (
 	miniostore "cloud-backend/internal/repo/storage/minio"
 	audituc "cloud-backend/internal/usecase/audit"
 	authuc "cloud-backend/internal/usecase/auth"
+	favoritesuc "cloud-backend/internal/usecase/favorites"
 	sharinguc "cloud-backend/internal/usecase/sharing"
 	storageuc "cloud-backend/internal/usecase/storage"
 	jwtpkg "cloud-backend/pkg/jwt"
@@ -147,6 +148,10 @@ func wireDeps(
 		Logger:     log,
 	}
 
+	favoritesSvc := &favoritesuc.Service{
+		Repo: store,
+	}
+
 	return wiredDeps{
 		router: v1.Deps{
 			Auth:                 authSvc,
@@ -157,6 +162,7 @@ func wireDeps(
 			Folders:              storageSvc,
 			Trash:                storageSvc,
 			Sharing:              sharingSvc,
+			Favorites:            favoritesSvc,
 			Audit:                auditSvc,
 			PublicKeyRateLimiter: publicKeyRL,
 			LoginRateLimiter:     loginRL,

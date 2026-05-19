@@ -115,3 +115,8 @@ type TrashListResponse struct {
 	Blobs   []TrashBlobItem   `json:"blobs"`
 	Folders []TrashFolderItem `json:"folders"`
 }
+
+type FavoritesResponse struct {
+	Blobs   []SearchBlobItem `json:"blobs"`
+	Folders []FolderItem     `json:"folders"`
+}

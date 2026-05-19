@@ -22,6 +22,7 @@ type Deps struct {
 	Folders              FolderService
 	Trash                TrashService
 	Sharing              SharingService
+	Favorites            FavoritesService
 	Audit                AuditService
 	PublicKeyRateLimiter restapi.RateLimiter
 	LoginRateLimiter     restapi.RateLimiter
@@ -97,6 +98,14 @@ func NewRouter(d Deps) chi.Router {
 		r.With(publicKeyRL).Get("/users/public-key", getRecipientPublicKey(d))
 
 		r.Get("/audit", listAuditEvents(d))
+
+		r.Route("/favorites", func(r chi.Router) {
+			r.Get("/", favoritesList(d))
+			r.Post("/blobs/{id}", favoritesAdd(d, "blob"))
+			r.Delete("/blobs/{id}", favoritesRemove(d, "blob"))
+			r.Post("/folders/{id}", favoritesAdd(d, "folder"))
+			r.Delete("/folders/{id}", favoritesRemove(d, "folder"))
+		})
 	})
 
 	return r
