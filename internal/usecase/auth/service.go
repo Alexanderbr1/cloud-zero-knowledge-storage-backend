@@ -20,6 +20,7 @@ import (
 type UserRepository interface {
 	CreateUser(ctx context.Context, p NewUserParams) error
 	GetByEmail(ctx context.Context, email string) (entity.User, bool, error)
+	GetCryptoSaltByUserID(ctx context.Context, userID uuid.UUID) ([]byte, error)
 }
 
 type SessionRepository interface {
@@ -270,6 +271,16 @@ func (s *Service) RevokeOtherDeviceSessions(ctx context.Context, userID, current
 		}
 	}
 	return nil
+}
+
+func (s *Service) GetCryptoSalt(ctx context.Context, userID uuid.UUID) (string, error) {
+	tctx, cancel := dbCtx(ctx)
+	defer cancel()
+	salt, err := s.Users.GetCryptoSaltByUserID(tctx, userID)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(salt), nil
 }
 
 func (s *Service) CleanOrphanedSessions(ctx context.Context) error {

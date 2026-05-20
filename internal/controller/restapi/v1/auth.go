@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
 	"cloud-backend/config"
@@ -21,6 +22,7 @@ type AuthService interface {
 	LoginFinalize(ctx context.Context, p authuc.LoginFinalizeParams) (authuc.LoginFinalizeResult, error)
 	Refresh(ctx context.Context, refreshToken string) (authuc.TokenPair, error)
 	Logout(ctx context.Context, refreshToken string) error
+	GetCryptoSalt(ctx context.Context, userID uuid.UUID) (string, error)
 }
 
 const tokenTypeBearer = "Bearer"
@@ -146,6 +148,22 @@ func logout(d Deps) http.HandlerFunc {
 		}
 		clearRefreshTokenCookie(w, d.RefreshCookie)
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func getCryptoSalt(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := restapi.MustUserID(w, r)
+		if !ok {
+			return
+		}
+		saltB64, err := d.Auth.GetCryptoSalt(r.Context(), userID)
+		if err != nil {
+			d.Logger.Error().Err(err).Msg("get crypto salt")
+			restapi.WriteError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		restapi.WriteJSON(w, http.StatusOK, dto.CryptoSaltResponse{CryptoSalt: saltB64})
 	}
 }
 

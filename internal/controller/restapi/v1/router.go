@@ -24,15 +24,17 @@ type Deps struct {
 	Sharing              SharingService
 	Favorites            FavoritesService
 	Audit                AuditService
-	PublicKeyRateLimiter restapi.RateLimiter
-	LoginRateLimiter     restapi.RateLimiter
+	PublicKeyRateLimiter  restapi.RateLimiter
+	LoginRateLimiter      restapi.RateLimiter
+	CryptoSaltRateLimiter restapi.RateLimiter
 	RefreshCookie        config.RefreshCookieConfig
 	Logger               zerolog.Logger
 }
 
 func NewRouter(d Deps) chi.Router {
-	loginRL := restapi.RateLimitMiddleware(d.LoginRateLimiter, realIP)
-	publicKeyRL := restapi.RateLimitMiddleware(d.PublicKeyRateLimiter, userIDKey)
+	loginRL       := restapi.RateLimitMiddleware(d.LoginRateLimiter, realIP)
+	publicKeyRL   := restapi.RateLimitMiddleware(d.PublicKeyRateLimiter, userIDKey)
+	cryptoSaltRL  := restapi.RateLimitMiddleware(d.CryptoSaltRateLimiter, userIDKey)
 
 	r := chi.NewRouter()
 
@@ -95,6 +97,7 @@ func NewRouter(d Deps) chi.Router {
 			r.Delete("/{shareID}", revokeShare(d))
 		})
 
+		r.With(cryptoSaltRL).Get("/auth/crypto-salt", getCryptoSalt(d))
 		r.With(publicKeyRL).Get("/users/public-key", getRecipientPublicKey(d))
 
 		r.Get("/audit", listAuditEvents(d))

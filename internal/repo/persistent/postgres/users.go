@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -45,6 +46,17 @@ func (s *Storage) GetByEmail(ctx context.Context, email string) (entity.User, bo
 		return entity.User{}, false, err
 	}
 	return u, true, nil
+}
+
+func (s *Storage) GetCryptoSaltByUserID(ctx context.Context, userID uuid.UUID) ([]byte, error) {
+	var salt []byte
+	err := s.pool.QueryRow(ctx,
+		`SELECT crypto_salt FROM users WHERE id = $1`, userID,
+	).Scan(&salt)
+	if err != nil {
+		return nil, err
+	}
+	return salt, nil
 }
 
 // nullableBytes returns nil for empty slices so nullable BYTEA columns store NULL

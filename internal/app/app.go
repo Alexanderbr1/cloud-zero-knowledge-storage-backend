@@ -100,8 +100,9 @@ func wireDeps(
 	tokens := jwtpkg.NewService([]byte(cfg.JWT.Secret), cfg.JWT.AccessTTL)
 
 	blocklist := rediscache.NewSessionBlocklist(redisClient)
-	publicKeyRL := rediscache.NewRateLimiter(redisClient, "rl:pubkey:", 20, time.Minute)
-	loginRL := rediscache.NewRateLimiter(redisClient, "rl:login:", 10, time.Minute)
+	publicKeyRL   := rediscache.NewRateLimiter(redisClient, "rl:pubkey:", 20, time.Minute)
+	loginRL       := rediscache.NewRateLimiter(redisClient, "rl:login:", 10, time.Minute)
+	cryptoSaltRL  := rediscache.NewRateLimiter(redisClient, "rl:cryptosalt:", 5, 15*time.Minute)
 
 	mailer := mailerpkg.New(mailerpkg.Config{
 		ResendAPIKey: cfg.SMTP.ResendAPIKey,
@@ -164,8 +165,9 @@ func wireDeps(
 			Sharing:              sharingSvc,
 			Favorites:            favoritesSvc,
 			Audit:                auditSvc,
-			PublicKeyRateLimiter: publicKeyRL,
-			LoginRateLimiter:     loginRL,
+			PublicKeyRateLimiter:  publicKeyRL,
+			LoginRateLimiter:      loginRL,
+			CryptoSaltRateLimiter: cryptoSaltRL,
 			RefreshCookie:        cfg.RefreshCookie,
 			Logger:               log,
 		},

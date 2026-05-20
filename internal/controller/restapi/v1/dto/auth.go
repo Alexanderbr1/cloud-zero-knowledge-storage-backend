@@ -28,6 +28,10 @@ type LoginFinalizeRequest struct {
 	M1        string `json:"M1"         validate:"required"` // client proof (hex)
 }
 
+type CryptoSaltResponse struct {
+	CryptoSalt string `json:"crypto_salt"`
+}
+
 type TokenResponse struct {
 	AccessToken         string `json:"access_token"`
 	ExpiresIn           int64  `json:"expires_in"`
