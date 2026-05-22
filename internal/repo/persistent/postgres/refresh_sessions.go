@@ -13,9 +13,9 @@ var _ authuc.SessionRepository = (*Storage)(nil)
 
 func (s *Storage) CreateRefreshSession(ctx context.Context, p authuc.RefreshSessionParams) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO refresh_sessions (id, user_id, device_session_id, refresh_token_hash, expires_at)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		p.SessionID, p.UserID, p.DeviceSessionID, p.TokenHash, p.ExpiresAt,
+		`INSERT INTO refresh_sessions (id, user_id, device_session_id, refresh_token_hash, client_key, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		p.SessionID, p.UserID, p.DeviceSessionID, p.TokenHash, p.ClientKey, p.ExpiresAt,
 	)
 	return err
 }
@@ -32,9 +32,9 @@ func (s *Storage) ConsumeRefreshSession(ctx context.Context, tokenHash []byte) (
 		    AND refresh_sessions.expires_at > now()
 		    AND device_sessions.id = refresh_sessions.device_session_id
 		    AND device_sessions.revoked_at IS NULL
-		RETURNING refresh_sessions.id, refresh_sessions.user_id, refresh_sessions.device_session_id`,
+		RETURNING refresh_sessions.id, refresh_sessions.user_id, refresh_sessions.device_session_id, refresh_sessions.client_key`,
 		tokenHash,
-	).Scan(&cs.SessionID, &cs.UserID, &cs.DeviceSessionID)
+	).Scan(&cs.SessionID, &cs.UserID, &cs.DeviceSessionID, &cs.ClientKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return authuc.ConsumedSession{}, false, nil
 	}

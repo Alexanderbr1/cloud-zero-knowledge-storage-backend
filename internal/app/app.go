@@ -125,6 +125,8 @@ func wireDeps(
 		Logger:         log,
 		Notifier:       mailer,
 		Audit:          auditSvc,
+		ResetTokens:    store,
+		FrontendOrigin: cfg.FrontendOrigin,
 	}
 
 	storageSvc := &storageuc.Service{

@@ -44,6 +44,10 @@ func NewRouter(d Deps) chi.Router {
 		r.With(loginRL).Post("/login/finalize", loginFinalize(d))
 		r.With(loginRL).Post("/refresh", refresh(d))
 		r.With(loginRL).Post("/logout", logout(d))
+
+		r.With(loginRL).Post("/reset-password/request", requestPasswordReset(d))
+		r.With(loginRL).Post("/reset-password/recovery-data", getRecoveryData(d))
+		r.With(loginRL).Post("/reset-password/confirm", resetPasswordConfirm(d))
 	})
 
 	r.Group(func(r chi.Router) {
@@ -96,6 +100,7 @@ func NewRouter(d Deps) chi.Router {
 		})
 
 		r.Get("/auth/crypto-salt", getCryptoSalt(d))
+		r.Post("/auth/setup-kek", setupKEK(d))
 		r.With(publicKeyRL).Get("/users/public-key", getRecipientPublicKey(d))
 
 		r.Get("/audit", listAuditEvents(d))

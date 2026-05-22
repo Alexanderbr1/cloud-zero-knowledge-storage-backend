@@ -22,7 +22,11 @@ type AuthService interface {
 	LoginFinalize(ctx context.Context, p authuc.LoginFinalizeParams) (authuc.LoginFinalizeResult, error)
 	Refresh(ctx context.Context, refreshToken string) (authuc.TokenPair, error)
 	Logout(ctx context.Context, refreshToken string) error
-	GetCryptoSalt(ctx context.Context, userID uuid.UUID) (string, error)
+	GetCryptoSalt(ctx context.Context, userID uuid.UUID) (cryptoSaltB64 string, kekEncMaster []byte, err error)
+	RequestPasswordReset(ctx context.Context, email string) error
+	GetRecoveryData(ctx context.Context, token string) (authuc.RecoveryData, bool, error)
+	ResetPassword(ctx context.Context, token string, p authuc.ResetPasswordParams) error
+	SetupKEK(ctx context.Context, p authuc.SetupKEKParams) error
 }
 
 const tokenTypeBearer = "Bearer"
@@ -51,21 +55,36 @@ func register(d Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		kekMaster, ok := mustDecodeB64(w, in.KEKEncryptedMaster, "kek_encrypted_master", 40, 40)
+		if !ok {
+			return
+		}
+		kekRecovery, ok := mustDecodeB64(w, in.KEKEncryptedRecovery, "kek_encrypted_recovery", 40, 40)
+		if !ok {
+			return
+		}
+		recSalt, ok := mustDecodeB64(w, in.RecoverySalt, "recovery_salt", 1, 0)
+		if !ok {
+			return
+		}
 		pair, err := d.Auth.Register(r.Context(), authuc.RegisterParams{
-			Email:               in.Email,
-			SRPSalt:             in.SRPSalt,
-			SRPVerifier:         in.SRPVerifier,
-			BcryptSalt:          in.BcryptSalt,
-			CryptoSalt:          cryptoSalt,
-			PublicKey:           publicKey,
-			EncryptedPrivateKey: encPrivKey,
-			Device:              parseDeviceInfo(r),
+			Email:                in.Email,
+			SRPSalt:              in.SRPSalt,
+			SRPVerifier:          in.SRPVerifier,
+			BcryptSalt:           in.BcryptSalt,
+			CryptoSalt:           cryptoSalt,
+			PublicKey:            publicKey,
+			EncryptedPrivateKey:  encPrivKey,
+			KEKEncryptedMaster:   kekMaster,
+			KEKEncryptedRecovery: kekRecovery,
+			RecoverySalt:         recSalt,
+			Device:               parseDeviceInfo(r),
 		})
 		if err != nil {
 			writeAuthErr(w, err, d.Logger)
 			return
 		}
-		writeTokenResponse(w, d.RefreshCookie, http.StatusCreated, pair, "", nil)
+		writeTokenResponse(w, d.RefreshCookie, http.StatusCreated, pair, "", nil, nil)
 	}
 }
 
@@ -117,7 +136,7 @@ func loginFinalize(d Deps) http.HandlerFunc {
 			return
 		}
 		d.Audit.LogAsync(r.Context(), auditEvent(result.UserID, entity.AuditLoginSuccess, device.IPAddress, device.UserAgent, nil, ""))
-		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, result.Pair, result.M2, result.EncryptedPrivateKey)
+		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, result.Pair, result.M2, result.EncryptedPrivateKey, result.KEKEncryptedMaster)
 	}
 }
 
@@ -136,7 +155,7 @@ func refresh(d Deps) http.HandlerFunc {
 			writeAuthErr(w, err, d.Logger)
 			return
 		}
-		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, pair, "", nil)
+		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, pair, "", nil, nil)
 	}
 }
 
@@ -157,13 +176,145 @@ func getCryptoSalt(d Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		saltB64, err := d.Auth.GetCryptoSalt(r.Context(), userID)
+		saltB64, kekEncMaster, err := d.Auth.GetCryptoSalt(r.Context(), userID)
 		if err != nil {
 			d.Logger.Error().Err(err).Msg("get crypto salt")
 			restapi.WriteError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		restapi.WriteJSON(w, http.StatusOK, dto.CryptoSaltResponse{CryptoSalt: saltB64})
+		resp := dto.CryptoSaltResponse{CryptoSalt: saltB64}
+		if len(kekEncMaster) > 0 {
+			resp.KEKEncryptedMaster = base64.StdEncoding.EncodeToString(kekEncMaster)
+		}
+		restapi.WriteJSON(w, http.StatusOK, resp)
+	}
+}
+
+func requestPasswordReset(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var in dto.ResetPasswordRequestRequest
+		if err := restapi.DecodeJSON(r, &in); err != nil {
+			restapi.WriteError(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		if err := restapi.ValidateStruct(&in); err != nil {
+			restapi.WriteValidationError(w, err)
+			return
+		}
+		if err := d.Auth.RequestPasswordReset(r.Context(), in.Email); err != nil {
+			d.Logger.Error().Err(err).Msg("request password reset")
+			restapi.WriteError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func getRecoveryData(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var in dto.RecoveryDataRequest
+		if err := restapi.DecodeJSON(r, &in); err != nil {
+			restapi.WriteError(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		if err := restapi.ValidateStruct(&in); err != nil {
+			restapi.WriteValidationError(w, err)
+			return
+		}
+		data, ok, err := d.Auth.GetRecoveryData(r.Context(), in.Token)
+		if err != nil {
+			d.Logger.Error().Err(err).Msg("get recovery data")
+			restapi.WriteError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if !ok || len(data.KEKEncryptedRecovery) == 0 || len(data.RecoverySalt) == 0 {
+			restapi.WriteError(w, http.StatusNotFound, "not found")
+			return
+		}
+		restapi.WriteJSON(w, http.StatusOK, dto.RecoveryDataResponse{
+			KEKEncryptedRecovery: base64.StdEncoding.EncodeToString(data.KEKEncryptedRecovery),
+			RecoverySalt:         base64.StdEncoding.EncodeToString(data.RecoverySalt),
+		})
+	}
+}
+
+func resetPasswordConfirm(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var in dto.ResetPasswordConfirmRequest
+		if err := restapi.DecodeJSON(r, &in); err != nil {
+			restapi.WriteError(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		if err := restapi.ValidateStruct(&in); err != nil {
+			restapi.WriteValidationError(w, err)
+			return
+		}
+		cryptoSalt, ok := mustDecodeB64(w, in.CryptoSalt, "crypto_salt", 1, 0)
+		if !ok {
+			return
+		}
+		kekEncMaster, ok := mustDecodeB64(w, in.KEKEncryptedMaster, "kek_encrypted_master", 40, 40)
+		if !ok {
+			return
+		}
+		err := d.Auth.ResetPassword(r.Context(), in.Token, authuc.ResetPasswordParams{
+			SRPSalt:            in.SRPSalt,
+			SRPVerifier:        in.SRPVerifier,
+			BcryptSalt:         in.BcryptSalt,
+			CryptoSalt:         cryptoSalt,
+			KEKEncryptedMaster: kekEncMaster,
+		})
+		if err != nil {
+			if errors.Is(err, authuc.ErrResetTokenInvalid) {
+				restapi.WriteError(w, http.StatusUnprocessableEntity, "invalid or expired reset token")
+				return
+			}
+			d.Logger.Error().Err(err).Msg("reset password confirm")
+			restapi.WriteError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func setupKEK(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := restapi.MustUserID(w, r)
+		if !ok {
+			return
+		}
+		var in dto.SetupKEKRequest
+		if err := restapi.DecodeJSON(r, &in); err != nil {
+			restapi.WriteError(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		if err := restapi.ValidateStruct(&in); err != nil {
+			restapi.WriteValidationError(w, err)
+			return
+		}
+		kekMaster, ok := mustDecodeB64(w, in.KEKEncryptedMaster, "kek_encrypted_master", 40, 40)
+		if !ok {
+			return
+		}
+		kekRecovery, ok := mustDecodeB64(w, in.KEKEncryptedRecovery, "kek_encrypted_recovery", 40, 40)
+		if !ok {
+			return
+		}
+		recSalt, ok := mustDecodeB64(w, in.RecoverySalt, "recovery_salt", 1, 0)
+		if !ok {
+			return
+		}
+		if err := d.Auth.SetupKEK(r.Context(), authuc.SetupKEKParams{
+			UserID:               userID,
+			KEKEncryptedMaster:   kekMaster,
+			KEKEncryptedRecovery: kekRecovery,
+			RecoverySalt:         recSalt,
+		}); err != nil {
+			d.Logger.Error().Err(err).Msg("setup kek")
+			restapi.WriteError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
@@ -174,6 +325,7 @@ func writeTokenResponse(
 	pair authuc.TokenPair,
 	m2 string,
 	encPrivKey []byte,
+	kekEncMaster []byte,
 ) {
 	maxAge := int(pair.RefreshExpiresIn)
 	if maxAge < 0 {
@@ -190,6 +342,12 @@ func writeTokenResponse(
 	}
 	if len(encPrivKey) > 0 {
 		resp.EncryptedPrivateKey = base64.StdEncoding.EncodeToString(encPrivKey)
+	}
+	if len(kekEncMaster) > 0 {
+		resp.KEKEncryptedMaster = base64.StdEncoding.EncodeToString(kekEncMaster)
+	}
+	if len(pair.ClientKey) > 0 {
+		resp.ClientKey = base64.StdEncoding.EncodeToString(pair.ClientKey)
 	}
 	restapi.WriteJSON(w, status, resp)
 }

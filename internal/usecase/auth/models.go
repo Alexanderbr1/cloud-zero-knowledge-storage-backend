@@ -7,14 +7,17 @@ import (
 )
 
 type RegisterParams struct {
-	Email               string
-	SRPSalt             string
-	SRPVerifier         string
-	BcryptSalt          string
-	CryptoSalt          []byte
-	PublicKey           []byte
-	EncryptedPrivateKey []byte
-	Device              DeviceInfo
+	Email                string
+	SRPSalt              string
+	SRPVerifier          string
+	BcryptSalt           string
+	CryptoSalt           []byte
+	PublicKey            []byte
+	EncryptedPrivateKey  []byte
+	KEKEncryptedMaster   []byte
+	KEKEncryptedRecovery []byte
+	RecoverySalt         []byte
+	Device               DeviceInfo
 }
 
 type LoginFinalizeParams struct {
@@ -24,14 +27,38 @@ type LoginFinalizeParams struct {
 }
 
 type NewUserParams struct {
-	ID                  uuid.UUID
-	Email               string
-	SRPSalt             string
-	SRPVerifier         string
-	BcryptSalt          string
-	CryptoSalt          []byte
-	PublicKey           []byte
-	EncryptedPrivateKey []byte
+	ID                   uuid.UUID
+	Email                string
+	SRPSalt              string
+	SRPVerifier          string
+	BcryptSalt           string
+	CryptoSalt           []byte
+	PublicKey            []byte
+	EncryptedPrivateKey  []byte
+	KEKEncryptedMaster   []byte
+	KEKEncryptedRecovery []byte
+	RecoverySalt         []byte
+}
+
+type RecoveryData struct {
+	UserID               uuid.UUID
+	KEKEncryptedRecovery []byte
+	RecoverySalt         []byte
+}
+
+type ResetPasswordParams struct {
+	SRPSalt            string
+	SRPVerifier        string
+	BcryptSalt         string
+	CryptoSalt         []byte
+	KEKEncryptedMaster []byte
+}
+
+type SetupKEKParams struct {
+	UserID               uuid.UUID
+	KEKEncryptedMaster   []byte
+	KEKEncryptedRecovery []byte
+	RecoverySalt         []byte
 }
 
 type RefreshSessionParams struct {
@@ -39,6 +66,7 @@ type RefreshSessionParams struct {
 	UserID          uuid.UUID
 	DeviceSessionID uuid.UUID
 	TokenHash       []byte
+	ClientKey       []byte
 	ExpiresAt       time.Time
 }
 
@@ -46,6 +74,7 @@ type ConsumedSession struct {
 	SessionID       uuid.UUID
 	UserID          uuid.UUID
 	DeviceSessionID uuid.UUID
+	ClientKey       []byte
 }
 
 type DeviceInfo struct {
@@ -60,6 +89,7 @@ type TokenPair struct {
 	RefreshToken     string
 	RefreshExpiresIn int64
 	DeviceSessionID  uuid.UUID
+	ClientKey        []byte
 }
 
 type LoginInitResult struct {
@@ -74,5 +104,6 @@ type LoginFinalizeResult struct {
 	M2                  string
 	Pair                TokenPair
 	EncryptedPrivateKey []byte
+	KEKEncryptedMaster  []byte
 	UserID              uuid.UUID
 }

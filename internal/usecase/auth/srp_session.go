@@ -20,6 +20,7 @@ type SRPSessEntry struct {
 	CryptoSalt          []byte
 	BcryptSalt          string
 	EncryptedPrivateKey []byte
+	KEKEncryptedMaster  []byte
 	ExpiresAt           time.Time
 }
 

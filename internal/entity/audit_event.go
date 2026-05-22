@@ -23,6 +23,7 @@ const (
 	AuditLogout          = "logout"
 	AuditSessionRevoked  = "session_revoked"
 	AuditSessionsRevoked = "sessions_revoked_other"
+	AuditPasswordReset   = "password_reset"
 
 	AuditFileUploaded    = "file_uploaded"
 	AuditFileDownloaded  = "file_downloaded"

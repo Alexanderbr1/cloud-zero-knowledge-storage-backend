@@ -16,6 +16,7 @@ type CreateShareRequest struct {
 type ShareResponse struct {
 	ShareID         string    `json:"share_id"`
 	BlobID          string    `json:"blob_id"`
+	OwnerID         string    `json:"owner_id"`
 	OwnerEmail      string    `json:"owner_email"`
 	RecipientEmail  string    `json:"recipient_email,omitempty"`
 	BlobFileName    string    `json:"file_name"`

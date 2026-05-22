@@ -204,6 +204,7 @@ func shareToDTO(s entity.FileShareView, downloadURL, fileIVB64 string) dto.Share
 	resp := dto.ShareResponse{
 		ShareID:         s.ID.String(),
 		BlobID:          s.BlobID.String(),
+		OwnerID:         s.OwnerID.String(),
 		OwnerEmail:      s.OwnerEmail,
 		RecipientEmail:  s.RecipientEmail,
 		BlobFileName:    s.BlobFileName,

@@ -39,9 +39,14 @@ type shareEmailData struct {
 	FileName   string
 }
 
+type resetEmailData struct {
+	ResetURL string
+}
+
 var (
 	loginTmpl = template.Must(template.New("login").Parse(loginHTML))
 	shareTmpl = template.Must(template.New("share").Parse(shareHTML))
+	resetTmpl = template.Must(template.New("reset").Parse(resetHTML))
 )
 
 func (m *Mailer) NotifyNewLogin(ctx context.Context, toEmail, deviceName, ipAddress string) error {
@@ -59,6 +64,19 @@ func (m *Mailer) NotifyNewLogin(ctx context.Context, toEmail, deviceName, ipAddr
 		return fmt.Errorf("mailer: render login template: %w", err)
 	}
 	return m.send(ctx, toEmail, "Новый вход в аккаунт", plain, htmlBuf.String())
+}
+
+func (m *Mailer) NotifyPasswordReset(ctx context.Context, toEmail, resetURL string) error {
+	data := resetEmailData{ResetURL: resetURL}
+	plain := fmt.Sprintf(
+		"Вы запросили сброс пароля.\n\nПерейдите по ссылке для сброса пароля:\n%s\n\nСсылка действительна 1 час.\n\nЕсли вы не запрашивали сброс пароля — проигнорируйте это письмо.",
+		resetURL,
+	)
+	var htmlBuf bytes.Buffer
+	if err := resetTmpl.Execute(&htmlBuf, data); err != nil {
+		return fmt.Errorf("mailer: render reset template: %w", err)
+	}
+	return m.send(ctx, toEmail, "Сброс пароля", plain, htmlBuf.String())
 }
 
 func (m *Mailer) NotifyNewShare(ctx context.Context, toEmail, ownerEmail, fileName string) error {
@@ -193,5 +211,22 @@ const shareHTML = baseHeader + `
   <table width="100%" cellpadding="0" cellspacing="0" border="0">
     <tr><td style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;padding:14px 16px;">
       <p style="margin:0;font-size:14px;color:#1E40AF;line-height:1.6;">&#128274; Файл зашифрован и доступен только вам. Для просмотра войдите в приложение.</p>
+    </td></tr>
+  </table>` + baseFooter
+
+const resetHTML = baseHeader + `
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px;">
+    <tr><td align="center"><div style="display:inline-block;background:#FEF3C7;border-radius:50%;width:60px;height:60px;line-height:60px;text-align:center;font-size:30px;">&#128273;</div></td></tr>
+  </table>
+  <h1 style="margin:0 0 6px;font-size:22px;font-weight:700;color:#111827;text-align:center;">Сброс пароля</h1>
+  <p style="margin:0 0 28px;font-size:14px;color:#6B7280;text-align:center;">Нажмите на кнопку ниже, чтобы сбросить пароль</p>
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:24px;">
+    <tr><td align="center">
+      <a href="{{.ResetURL}}" style="display:inline-block;background:#1D4ED8;color:#ffffff;font-size:15px;font-weight:600;padding:14px 32px;border-radius:8px;text-decoration:none;">Сбросить пароль</a>
+    </td></tr>
+  </table>
+  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr><td style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:14px 16px;">
+      <p style="margin:0;font-size:14px;color:#991B1B;line-height:1.6;">&#9888;&#65039; Ссылка действительна <strong>1 час</strong>. Если вы не запрашивали сброс — проигнорируйте это письмо.</p>
     </td></tr>
   </table>` + baseFooter

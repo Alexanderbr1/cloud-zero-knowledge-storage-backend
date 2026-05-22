@@ -8,4 +8,5 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrInvalidRefresh     = errors.New("invalid refresh token")
 	ErrSessionNotFound    = errors.New("session not found")
+	ErrResetTokenInvalid  = errors.New("reset token invalid or expired")
 )

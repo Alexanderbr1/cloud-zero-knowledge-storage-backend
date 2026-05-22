@@ -16,7 +16,8 @@ type Config struct {
 
 	RedisURL string
 
-	LogLevel string
+	LogLevel       string
+	FrontendOrigin string
 
 	StorageQuotaBytes int64
 	MaxUploadBytes    int64
@@ -86,6 +87,7 @@ func (l *loader) build() Config {
 		DatabaseURL:       l.requireStr("DATABASE_URL"),
 		RedisURL:          l.requireStr("REDIS_URL"),
 		LogLevel:          envStr("LOG_LEVEL", "info"),
+		FrontendOrigin:    envStr("FRONTEND_ORIGIN", ""),
 		StorageQuotaBytes: envInt64("STORAGE_QUOTA_BYTES", 0),
 		MaxUploadBytes:    envInt64("MAX_UPLOAD_BYTES", 0),
 		TrashTTL:          l.requirePosDuration("TRASH_TTL", 30*24*time.Hour),

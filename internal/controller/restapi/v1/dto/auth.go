@@ -1,13 +1,16 @@
 package dto
 
 type RegisterRequest struct {
-	Email               string `json:"email"                 validate:"required,email,max=320"`
-	SRPSalt             string `json:"srp_salt"              validate:"required"`
-	SRPVerifier         string `json:"srp_verifier"          validate:"required"`
-	BcryptSalt          string `json:"bcrypt_salt"           validate:"required"`
-	CryptoSalt          string `json:"crypto_salt"           validate:"required"` // base64 PBKDF2 salt
-	PublicKey           string `json:"public_key"            validate:"required"` // base64 SPKI P-256
-	EncryptedPrivateKey string `json:"encrypted_private_key" validate:"required"` // base64 wrapped private key
+	Email                string `json:"email"                   validate:"required,email,max=320"`
+	SRPSalt              string `json:"srp_salt"                validate:"required"`
+	SRPVerifier          string `json:"srp_verifier"            validate:"required"`
+	BcryptSalt           string `json:"bcrypt_salt"             validate:"required"`
+	CryptoSalt           string `json:"crypto_salt"             validate:"required"` // base64 PBKDF2 salt
+	PublicKey            string `json:"public_key"              validate:"required"` // base64 SPKI P-256
+	EncryptedPrivateKey  string `json:"encrypted_private_key"   validate:"required"` // base64 wrapped private key
+	KEKEncryptedMaster   string `json:"kek_encrypted_master"    validate:"required"` // base64 AES-KW(masterKey, KEK)
+	KEKEncryptedRecovery string `json:"kek_encrypted_recovery"  validate:"required"` // base64 AES-KW(recoveryKey, KEK)
+	RecoverySalt         string `json:"recovery_salt"           validate:"required"` // base64 PBKDF2 salt for recovery key
 }
 
 type LoginInitRequest struct {
@@ -29,7 +32,8 @@ type LoginFinalizeRequest struct {
 }
 
 type CryptoSaltResponse struct {
-	CryptoSalt string `json:"crypto_salt"`
+	CryptoSalt         string `json:"crypto_salt"`
+	KEKEncryptedMaster string `json:"kek_encrypted_master,omitempty"` // base64; absent for legacy accounts
 }
 
 type TokenResponse struct {
@@ -37,6 +41,36 @@ type TokenResponse struct {
 	ExpiresIn           int64  `json:"expires_in"`
 	RefreshExpiresIn    int64  `json:"refresh_expires_in"`
 	TokenType           string `json:"token_type"`
-	M2                  string `json:"M2,omitempty"`                    // login-finalize only; client must verify
-	EncryptedPrivateKey string `json:"encrypted_private_key,omitempty"` // login-finalize only
+	M2                  string `json:"M2,omitempty"`                     // login-finalize only; client must verify
+	EncryptedPrivateKey string `json:"encrypted_private_key,omitempty"`  // login-finalize only
+	KEKEncryptedMaster  string `json:"kek_encrypted_master,omitempty"`   // login-finalize only
+	ClientKey           string `json:"client_key,omitempty"`             // base64 AES-GCM key for password blob persistence
+}
+
+type ResetPasswordRequestRequest struct {
+	Email string `json:"email" validate:"required,email,max=320"`
+}
+
+type RecoveryDataRequest struct {
+	Token string `json:"token" validate:"required"`
+}
+
+type RecoveryDataResponse struct {
+	KEKEncryptedRecovery string `json:"kek_encrypted_recovery"` // base64
+	RecoverySalt         string `json:"recovery_salt"`          // base64
+}
+
+type ResetPasswordConfirmRequest struct {
+	Token                string `json:"token"                  validate:"required"`
+	SRPSalt              string `json:"srp_salt"               validate:"required"`
+	SRPVerifier          string `json:"srp_verifier"           validate:"required"`
+	BcryptSalt           string `json:"bcrypt_salt"            validate:"required"`
+	CryptoSalt           string `json:"crypto_salt"            validate:"required"`
+	KEKEncryptedMaster   string `json:"kek_encrypted_master"   validate:"required"`
+}
+
+type SetupKEKRequest struct {
+	KEKEncryptedMaster   string `json:"kek_encrypted_master"   validate:"required"`
+	KEKEncryptedRecovery string `json:"kek_encrypted_recovery" validate:"required"`
+	RecoverySalt         string `json:"recovery_salt"          validate:"required"`
 }

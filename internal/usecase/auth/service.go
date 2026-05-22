@@ -20,7 +20,17 @@ import (
 type UserRepository interface {
 	CreateUser(ctx context.Context, p NewUserParams) error
 	GetByEmail(ctx context.Context, email string) (entity.User, bool, error)
-	GetCryptoSaltByUserID(ctx context.Context, userID uuid.UUID) ([]byte, error)
+	GetCryptoSaltAndKEKByUserID(ctx context.Context, userID uuid.UUID) (cryptoSalt []byte, kekEncMaster []byte, err error)
+	GetRecoveryDataByUserID(ctx context.Context, userID uuid.UUID) (RecoveryData, bool, error)
+	UpdateCredentialsAndKEK(ctx context.Context, userID uuid.UUID, p ResetPasswordParams) error
+	SaveKEKForUser(ctx context.Context, p SetupKEKParams) error
+}
+
+type PasswordResetRepository interface {
+	CreateResetToken(ctx context.Context, userID uuid.UUID, tokenHash []byte, expiresAt time.Time) error
+	ConsumeResetToken(ctx context.Context, tokenHash []byte) (uuid.UUID, bool, error)
+	GetUserIDFromResetToken(ctx context.Context, tokenHash []byte) (uuid.UUID, bool, error)
+	InvalidateUserTokens(ctx context.Context, userID uuid.UUID) error
 }
 
 type SessionRepository interface {
@@ -54,6 +64,7 @@ type TokenIssuer interface {
 // the caller fires notifications in a goroutine.
 type Notifier interface {
 	NotifyNewLogin(ctx context.Context, toEmail, deviceName, ipAddress string) error
+	NotifyPasswordReset(ctx context.Context, toEmail, resetURL string) error
 }
 
 type AuditLogger interface {
@@ -78,6 +89,8 @@ type Service struct {
 	Logger         zerolog.Logger
 	Notifier       Notifier
 	Audit          AuditLogger
+	ResetTokens    PasswordResetRepository
+	FrontendOrigin string
 }
 
 func (s *Service) Register(ctx context.Context, p RegisterParams) (TokenPair, error) {
@@ -88,14 +101,17 @@ func (s *Service) Register(ctx context.Context, p RegisterParams) (TokenPair, er
 	defer cancel()
 
 	if err := s.Users.CreateUser(tctx, NewUserParams{
-		ID:                  id,
-		Email:               p.Email,
-		SRPSalt:             p.SRPSalt,
-		SRPVerifier:         p.SRPVerifier,
-		BcryptSalt:          p.BcryptSalt,
-		CryptoSalt:          p.CryptoSalt,
-		PublicKey:           p.PublicKey,
-		EncryptedPrivateKey: p.EncryptedPrivateKey,
+		ID:                   id,
+		Email:                p.Email,
+		SRPSalt:              p.SRPSalt,
+		SRPVerifier:          p.SRPVerifier,
+		BcryptSalt:           p.BcryptSalt,
+		CryptoSalt:           p.CryptoSalt,
+		PublicKey:            p.PublicKey,
+		EncryptedPrivateKey:  p.EncryptedPrivateKey,
+		KEKEncryptedMaster:   p.KEKEncryptedMaster,
+		KEKEncryptedRecovery: p.KEKEncryptedRecovery,
+		RecoverySalt:         p.RecoverySalt,
 	}); err != nil {
 		return TokenPair{}, err
 	}
@@ -131,6 +147,7 @@ func (s *Service) LoginInit(ctx context.Context, email, aHex string) (LoginInitR
 		CryptoSalt:          slices.Clone(u.CryptoSalt),
 		BcryptSalt:          u.BcryptSalt,
 		EncryptedPrivateKey: slices.Clone(u.EncryptedPrivateKey),
+		KEKEncryptedMaster:  slices.Clone(u.KEKEncryptedMaster),
 		ExpiresAt:           time.Now().Add(SRPSessionTTL),
 	}) {
 		return LoginInitResult{}, fmt.Errorf("srp session store at capacity")
@@ -193,6 +210,7 @@ func (s *Service) LoginFinalize(ctx context.Context, p LoginFinalizeParams) (Log
 		M2:                  m2Hex,
 		Pair:                pair,
 		EncryptedPrivateKey: entry.EncryptedPrivateKey,
+		KEKEncryptedMaster:  entry.KEKEncryptedMaster,
 		UserID:              entry.UserID,
 	}, nil
 }
@@ -215,7 +233,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 		s.Logger.Debug().Err(err).Msg("update last_active_at failed")
 	}
 
-	return s.issueTokenPairForDevice(ctx, consumed.UserID, consumed.DeviceSessionID)
+	return s.issueTokenPairForDevice(ctx, consumed.UserID, consumed.DeviceSessionID, consumed.ClientKey)
 }
 
 func (s *Service) Logout(ctx context.Context, refreshToken string) error {
@@ -273,14 +291,127 @@ func (s *Service) RevokeOtherDeviceSessions(ctx context.Context, userID, current
 	return nil
 }
 
-func (s *Service) GetCryptoSalt(ctx context.Context, userID uuid.UUID) (string, error) {
+func (s *Service) RequestPasswordReset(ctx context.Context, email string) error {
+	email = strings.TrimSpace(strings.ToLower(email))
 	tctx, cancel := dbCtx(ctx)
 	defer cancel()
-	salt, err := s.Users.GetCryptoSaltByUserID(tctx, userID)
+
+	u, ok, err := s.Users.GetByEmail(tctx, email)
 	if err != nil {
-		return "", err
+		return err
 	}
-	return base64.StdEncoding.EncodeToString(salt), nil
+	if !ok || len(u.KEKEncryptedRecovery) == 0 {
+		// Don't reveal whether email exists or has recovery set up.
+		return nil
+	}
+
+	// Invalidate any previous active tokens before issuing a new one.
+	itctx, icancel := dbCtx(ctx)
+	defer icancel()
+	if err := s.ResetTokens.InvalidateUserTokens(itctx, u.ID); err != nil {
+		return err
+	}
+
+	raw, hash, err := newRefreshToken() // reuse same 32-byte random + SHA-256 pattern
+	if err != nil {
+		return err
+	}
+	expiresAt := time.Now().Add(time.Hour)
+
+	rtctx, rcancel := dbCtx(ctx)
+	defer rcancel()
+	if err := s.ResetTokens.CreateResetToken(rtctx, u.ID, hash, expiresAt); err != nil {
+		return err
+	}
+
+	origin := strings.TrimRight(s.FrontendOrigin, "/")
+	resetURL := origin + "/auth/reset-password?token=" + raw
+	go func() {
+		nctx, ncancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ncancel()
+		if err := s.Notifier.NotifyPasswordReset(nctx, email, resetURL); err != nil {
+			s.Logger.Warn().Err(err).Msg("password reset notification failed")
+		}
+	}()
+	return nil
+}
+
+// GetRecoveryData looks up recovery material for a valid, unexpired reset token.
+// The token is NOT consumed — it remains valid for the subsequent ResetPassword call.
+func (s *Service) GetRecoveryData(ctx context.Context, token string) (RecoveryData, bool, error) {
+	hash := refreshTokenHash(token)
+	tctx, cancel := dbCtx(ctx)
+	defer cancel()
+
+	userID, ok, err := s.ResetTokens.GetUserIDFromResetToken(tctx, hash)
+	if err != nil {
+		return RecoveryData{}, false, err
+	}
+	if !ok {
+		return RecoveryData{}, false, nil
+	}
+
+	tctx2, cancel2 := dbCtx(ctx)
+	defer cancel2()
+	return s.Users.GetRecoveryDataByUserID(tctx2, userID)
+}
+
+func (s *Service) ResetPassword(ctx context.Context, token string, p ResetPasswordParams) error {
+	hash := refreshTokenHash(token)
+	tctx, cancel := dbCtx(ctx)
+	defer cancel()
+
+	userID, ok, err := s.ResetTokens.ConsumeResetToken(tctx, hash)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrResetTokenInvalid
+	}
+
+	uctx, ucancel := dbCtx(ctx)
+	defer ucancel()
+	if err := s.Users.UpdateCredentialsAndKEK(uctx, userID, p); err != nil {
+		return err
+	}
+
+	// Revoke all active sessions — attacker with a stolen session loses access immediately.
+	sctx, scancel := dbCtx(ctx)
+	defer scancel()
+	revokedIDs, err := s.DeviceSessions.RevokeOtherSessions(sctx, userID, uuid.Nil)
+	if err != nil {
+		s.Logger.Warn().Err(err).Msg("revoke sessions after password reset failed")
+	} else if len(revokedIDs) > 0 {
+		bctx, bcancel := dbCtx(ctx)
+		defer bcancel()
+		if err := s.Blocklist.BlockBatch(bctx, revokedIDs, s.AccessTTL); err != nil {
+			s.Logger.Warn().Err(err).Msg("blocklist sessions after password reset failed")
+		}
+	}
+
+	if s.Audit != nil {
+		s.Audit.LogAsync(ctx, entity.AuditEvent{
+			UserID:    userID,
+			EventType: entity.AuditPasswordReset,
+		})
+	}
+	return nil
+}
+
+func (s *Service) SetupKEK(ctx context.Context, p SetupKEKParams) error {
+	tctx, cancel := dbCtx(ctx)
+	defer cancel()
+	return s.Users.SaveKEKForUser(tctx, p)
+}
+
+func (s *Service) GetCryptoSalt(ctx context.Context, userID uuid.UUID) (cryptoSaltB64 string, kekEncMaster []byte, err error) {
+	tctx, cancel := dbCtx(ctx)
+	defer cancel()
+	salt, kek, err := s.Users.GetCryptoSaltAndKEKByUserID(tctx, userID)
+	if err != nil {
+		return "", nil, err
+	}
+	return base64.StdEncoding.EncodeToString(salt), kek, nil
 }
 
 func (s *Service) CleanOrphanedSessions(ctx context.Context) error {
@@ -296,10 +427,14 @@ func (s *Service) issueTokenPair(ctx context.Context, userID uuid.UUID, device D
 		return TokenPair{}, fmt.Errorf("create device session: %w", err)
 	}
 
-	return s.issueTokenPairForDevice(ctx, userID, deviceSessionID)
+	return s.issueTokenPairForDevice(ctx, userID, deviceSessionID, nil)
 }
 
-func (s *Service) issueTokenPairForDevice(ctx context.Context, userID, deviceSessionID uuid.UUID) (TokenPair, error) {
+// issueTokenPairForDevice creates a new refresh session. If clientKey is nil a
+// fresh 32-byte random key is generated; otherwise the supplied key is reused
+// (used on refresh so the password blob in the client's localStorage remains
+// decryptable across the session chain).
+func (s *Service) issueTokenPairForDevice(ctx context.Context, userID, deviceSessionID uuid.UUID, clientKey []byte) (TokenPair, error) {
 	accessRaw, accessExp, err := s.Tokens.IssueAccess(userID, deviceSessionID)
 	if err != nil {
 		return TokenPair{}, err
@@ -308,6 +443,14 @@ func (s *Service) issueTokenPairForDevice(ctx context.Context, userID, deviceSes
 	if err != nil {
 		return TokenPair{}, err
 	}
+
+	if len(clientKey) == 0 {
+		clientKey = make([]byte, 32)
+		if _, err := rand.Read(clientKey); err != nil {
+			return TokenPair{}, fmt.Errorf("generate client key: %w", err)
+		}
+	}
+
 	sessID := uuid.New()
 	expiresAt := time.Now().Add(s.RefreshTTL)
 
@@ -319,6 +462,7 @@ func (s *Service) issueTokenPairForDevice(ctx context.Context, userID, deviceSes
 		UserID:          userID,
 		DeviceSessionID: deviceSessionID,
 		TokenHash:       refreshHashBytes,
+		ClientKey:       clientKey,
 		ExpiresAt:       expiresAt,
 	}); err != nil {
 		return TokenPair{}, err
@@ -329,6 +473,7 @@ func (s *Service) issueTokenPairForDevice(ctx context.Context, userID, deviceSes
 		RefreshToken:     refreshRaw,
 		RefreshExpiresIn: int64(s.RefreshTTL.Seconds()),
 		DeviceSessionID:  deviceSessionID,
+		ClientKey:        clientKey,
 	}, nil
 }
 
