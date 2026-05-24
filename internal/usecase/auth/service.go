@@ -23,7 +23,6 @@ type UserRepository interface {
 	GetCryptoSaltAndKEKByUserID(ctx context.Context, userID uuid.UUID) (cryptoSalt []byte, kekEncMaster []byte, err error)
 	GetRecoveryDataByUserID(ctx context.Context, userID uuid.UUID) (RecoveryData, bool, error)
 	UpdateCredentialsAndKEK(ctx context.Context, userID uuid.UUID, p ResetPasswordParams) error
-	SaveKEKForUser(ctx context.Context, p SetupKEKParams) error
 }
 
 type PasswordResetRepository interface {
@@ -292,6 +291,15 @@ func (s *Service) RevokeOtherDeviceSessions(ctx context.Context, userID, current
 }
 
 func (s *Service) RequestPasswordReset(ctx context.Context, email string) error {
+	// Pad all code paths to a fixed minimum to prevent timing-based email enumeration.
+	const minDelay = 300 * time.Millisecond
+	start := time.Now()
+	defer func() {
+		if d := minDelay - time.Since(start); d > 0 {
+			time.Sleep(d)
+		}
+	}()
+
 	email = strings.TrimSpace(strings.ToLower(email))
 	tctx, cancel := dbCtx(ctx)
 	defer cancel()
@@ -301,7 +309,6 @@ func (s *Service) RequestPasswordReset(ctx context.Context, email string) error 
 		return err
 	}
 	if !ok || len(u.KEKEncryptedRecovery) == 0 {
-		// Don't reveal whether email exists or has recovery set up.
 		return nil
 	}
 
@@ -312,7 +319,7 @@ func (s *Service) RequestPasswordReset(ctx context.Context, email string) error 
 		return err
 	}
 
-	raw, hash, err := newRefreshToken() // reuse same 32-byte random + SHA-256 pattern
+	raw, hash, err := newRefreshToken()
 	if err != nil {
 		return err
 	}
@@ -326,13 +333,13 @@ func (s *Service) RequestPasswordReset(ctx context.Context, email string) error 
 
 	origin := strings.TrimRight(s.FrontendOrigin, "/")
 	resetURL := origin + "/auth/reset-password?token=" + raw
-	go func() {
-		nctx, ncancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer ncancel()
-		if err := s.Notifier.NotifyPasswordReset(nctx, email, resetURL); err != nil {
-			s.Logger.Warn().Err(err).Msg("password reset notification failed")
-		}
-	}()
+
+	nctx, ncancel := context.WithTimeout(ctx, 5*time.Second)
+	defer ncancel()
+	if err := s.Notifier.NotifyPasswordReset(nctx, email, resetURL); err != nil {
+		s.Logger.Error().Err(err).Msg("password reset notification failed")
+		return fmt.Errorf("send reset email: %w", err)
+	}
 	return nil
 }
 
@@ -396,12 +403,6 @@ func (s *Service) ResetPassword(ctx context.Context, token string, p ResetPasswo
 		})
 	}
 	return nil
-}
-
-func (s *Service) SetupKEK(ctx context.Context, p SetupKEKParams) error {
-	tctx, cancel := dbCtx(ctx)
-	defer cancel()
-	return s.Users.SaveKEKForUser(tctx, p)
 }
 
 func (s *Service) GetCryptoSalt(ctx context.Context, userID uuid.UUID) (cryptoSaltB64 string, kekEncMaster []byte, err error) {

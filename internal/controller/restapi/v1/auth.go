@@ -26,7 +26,6 @@ type AuthService interface {
 	RequestPasswordReset(ctx context.Context, email string) error
 	GetRecoveryData(ctx context.Context, token string) (authuc.RecoveryData, bool, error)
 	ResetPassword(ctx context.Context, token string, p authuc.ResetPasswordParams) error
-	SetupKEK(ctx context.Context, p authuc.SetupKEKParams) error
 }
 
 const tokenTypeBearer = "Bearer"
@@ -182,11 +181,10 @@ func getCryptoSalt(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		resp := dto.CryptoSaltResponse{CryptoSalt: saltB64}
-		if len(kekEncMaster) > 0 {
-			resp.KEKEncryptedMaster = base64.StdEncoding.EncodeToString(kekEncMaster)
-		}
-		restapi.WriteJSON(w, http.StatusOK, resp)
+		restapi.WriteJSON(w, http.StatusOK, dto.CryptoSaltResponse{
+			CryptoSalt:         saltB64,
+			KEKEncryptedMaster: base64.StdEncoding.EncodeToString(kekEncMaster),
+		})
 	}
 }
 
@@ -270,47 +268,6 @@ func resetPasswordConfirm(d Deps) http.HandlerFunc {
 				return
 			}
 			d.Logger.Error().Err(err).Msg("reset password confirm")
-			restapi.WriteError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}
-}
-
-func setupKEK(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := restapi.MustUserID(w, r)
-		if !ok {
-			return
-		}
-		var in dto.SetupKEKRequest
-		if err := restapi.DecodeJSON(r, &in); err != nil {
-			restapi.WriteError(w, http.StatusBadRequest, "bad request")
-			return
-		}
-		if err := restapi.ValidateStruct(&in); err != nil {
-			restapi.WriteValidationError(w, err)
-			return
-		}
-		kekMaster, ok := mustDecodeB64(w, in.KEKEncryptedMaster, "kek_encrypted_master", 40, 40)
-		if !ok {
-			return
-		}
-		kekRecovery, ok := mustDecodeB64(w, in.KEKEncryptedRecovery, "kek_encrypted_recovery", 40, 40)
-		if !ok {
-			return
-		}
-		recSalt, ok := mustDecodeB64(w, in.RecoverySalt, "recovery_salt", 1, 0)
-		if !ok {
-			return
-		}
-		if err := d.Auth.SetupKEK(r.Context(), authuc.SetupKEKParams{
-			UserID:               userID,
-			KEKEncryptedMaster:   kekMaster,
-			KEKEncryptedRecovery: kekRecovery,
-			RecoverySalt:         recSalt,
-		}); err != nil {
-			d.Logger.Error().Err(err).Msg("setup kek")
 			restapi.WriteError(w, http.StatusInternalServerError, "internal error")
 			return
 		}

@@ -54,13 +54,6 @@ type ResetPasswordParams struct {
 	KEKEncryptedMaster []byte
 }
 
-type SetupKEKParams struct {
-	UserID               uuid.UUID
-	KEKEncryptedMaster   []byte
-	KEKEncryptedRecovery []byte
-	RecoverySalt         []byte
-}
-
 type RefreshSessionParams struct {
 	SessionID       uuid.UUID
 	UserID          uuid.UUID

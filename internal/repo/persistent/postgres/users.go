@@ -80,19 +80,6 @@ func (s *Storage) UpdateCredentialsAndKEK(ctx context.Context, userID uuid.UUID,
 	return err
 }
 
-func (s *Storage) SaveKEKForUser(ctx context.Context, p authuc.SetupKEKParams) error {
-	_, err := s.pool.Exec(ctx,
-		`UPDATE users
-		 SET kek_encrypted_master = $2, kek_encrypted_recovery = $3, recovery_salt = $4
-		 WHERE id = $1 AND kek_encrypted_master IS NULL`,
-		p.UserID,
-		nullableBytes(p.KEKEncryptedMaster),
-		nullableBytes(p.KEKEncryptedRecovery),
-		nullableBytes(p.RecoverySalt),
-	)
-	return err
-}
-
 func (s *Storage) GetCryptoSaltAndKEKByUserID(ctx context.Context, userID uuid.UUID) (cryptoSalt []byte, kekEncMaster []byte, err error) {
 	err = s.pool.QueryRow(ctx,
 		`SELECT crypto_salt, kek_encrypted_master FROM users WHERE id = $1`, userID,

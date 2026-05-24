@@ -32,9 +32,10 @@ type srpRecord struct {
 	VerifierHex         string `json:"v"`
 	BHex                string `json:"b"`
 	BPubHex             string `json:"B"`
-	CryptoSalt          string `json:"crypto_salt"` // base64
+	CryptoSalt          string `json:"crypto_salt"`   // base64
 	BcryptSalt          string `json:"bcrypt_salt"`
-	EncryptedPrivateKey string `json:"epk"` // base64
+	EncryptedPrivateKey string `json:"epk"`           // base64
+	KEKEncryptedMaster  string `json:"kek"`           // base64
 	ExpiresAt           int64  `json:"exp"`
 }
 
@@ -51,6 +52,7 @@ func (s *srpSessionStore) Store(id uuid.UUID, e *authuc.SRPSessEntry) bool {
 		CryptoSalt:          base64.StdEncoding.EncodeToString(e.CryptoSalt),
 		BcryptSalt:          e.BcryptSalt,
 		EncryptedPrivateKey: base64.StdEncoding.EncodeToString(e.EncryptedPrivateKey),
+		KEKEncryptedMaster:  base64.StdEncoding.EncodeToString(e.KEKEncryptedMaster),
 		ExpiresAt:           e.ExpiresAt.UnixMilli(),
 	}
 	data, err := json.Marshal(rec)
@@ -103,7 +105,8 @@ func (s *srpSessionStore) Consume(id uuid.UUID) (*authuc.SRPSessEntry, bool) {
 	}
 
 	cryptoSalt, _ := base64.StdEncoding.DecodeString(rec.CryptoSalt)
-	epk, _ := base64.StdEncoding.DecodeString(rec.EncryptedPrivateKey)
+	epk, _         := base64.StdEncoding.DecodeString(rec.EncryptedPrivateKey)
+	kek, _         := base64.StdEncoding.DecodeString(rec.KEKEncryptedMaster)
 
 	return &authuc.SRPSessEntry{
 		UserID:              userID,
@@ -114,6 +117,7 @@ func (s *srpSessionStore) Consume(id uuid.UUID) (*authuc.SRPSessEntry, bool) {
 		CryptoSalt:          cryptoSalt,
 		BcryptSalt:          rec.BcryptSalt,
 		EncryptedPrivateKey: epk,
+		KEKEncryptedMaster:  kek,
 		ExpiresAt:           time.UnixMilli(rec.ExpiresAt),
 	}, true
 }

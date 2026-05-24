@@ -100,7 +100,6 @@ func NewRouter(d Deps) chi.Router {
 		})
 
 		r.Get("/auth/crypto-salt", getCryptoSalt(d))
-		r.Post("/auth/setup-kek", setupKEK(d))
 		r.With(publicKeyRL).Get("/users/public-key", getRecipientPublicKey(d))
 
 		r.Get("/audit", listAuditEvents(d))

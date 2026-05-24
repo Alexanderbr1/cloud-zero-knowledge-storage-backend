@@ -33,7 +33,7 @@ type LoginFinalizeRequest struct {
 
 type CryptoSaltResponse struct {
 	CryptoSalt         string `json:"crypto_salt"`
-	KEKEncryptedMaster string `json:"kek_encrypted_master,omitempty"` // base64; absent for legacy accounts
+	KEKEncryptedMaster string `json:"kek_encrypted_master"`
 }
 
 type TokenResponse struct {
@@ -69,8 +69,3 @@ type ResetPasswordConfirmRequest struct {
 	KEKEncryptedMaster   string `json:"kek_encrypted_master"   validate:"required"`
 }
 
-type SetupKEKRequest struct {
-	KEKEncryptedMaster   string `json:"kek_encrypted_master"   validate:"required"`
-	KEKEncryptedRecovery string `json:"kek_encrypted_recovery" validate:"required"`
-	RecoverySalt         string `json:"recovery_salt"          validate:"required"`
-}
