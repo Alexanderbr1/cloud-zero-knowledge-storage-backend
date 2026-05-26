@@ -8,17 +8,18 @@ CREATE TABLE stored_blobs (
     encrypted_file_key BYTEA       NOT NULL,
     file_iv            BYTEA       NOT NULL,
     file_size          BIGINT      NOT NULL DEFAULT 0,
+    uploaded_at        TIMESTAMPTZ,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     deleted_at         TIMESTAMPTZ
 );
 
 CREATE INDEX idx_stored_blobs_user_created
     ON stored_blobs (user_id, created_at DESC)
-    WHERE deleted_at IS NULL;
+    WHERE deleted_at IS NULL AND uploaded_at IS NOT NULL;
 
 CREATE INDEX idx_stored_blobs_user_folder
     ON stored_blobs (user_id, folder_id, created_at DESC)
-    WHERE deleted_at IS NULL;
+    WHERE deleted_at IS NULL AND uploaded_at IS NOT NULL;
 
 -- FK index — required for batch operations on folder subtrees.
 CREATE INDEX idx_stored_blobs_folder_id
@@ -33,3 +34,8 @@ CREATE INDEX idx_stored_blobs_trash
 CREATE INDEX idx_stored_blobs_purge
     ON stored_blobs (deleted_at)
     WHERE deleted_at IS NOT NULL;
+
+-- Orphan cleanup job: pending blobs older than N hours.
+CREATE INDEX idx_stored_blobs_orphaned
+    ON stored_blobs (created_at)
+    WHERE uploaded_at IS NULL AND deleted_at IS NULL;

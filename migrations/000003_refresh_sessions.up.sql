@@ -3,6 +3,7 @@ CREATE TABLE refresh_sessions (
     user_id            UUID        NOT NULL REFERENCES users(id)           ON DELETE CASCADE,
     device_session_id  UUID        NOT NULL REFERENCES device_sessions(id) ON DELETE CASCADE,
     refresh_token_hash BYTEA       NOT NULL,
+    client_key         BYTEA,
     expires_at         TIMESTAMPTZ NOT NULL,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     revoked_at         TIMESTAMPTZ

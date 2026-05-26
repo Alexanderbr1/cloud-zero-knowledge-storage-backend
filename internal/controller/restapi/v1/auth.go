@@ -255,12 +255,22 @@ func resetPasswordConfirm(d Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		kekEncRecovery, ok := mustDecodeB64(w, in.KEKEncryptedRecovery, "kek_encrypted_recovery", 40, 40)
+		if !ok {
+			return
+		}
+		recSalt, ok := mustDecodeB64(w, in.RecoverySalt, "recovery_salt", 1, 0)
+		if !ok {
+			return
+		}
 		err := d.Auth.ResetPassword(r.Context(), in.Token, authuc.ResetPasswordParams{
-			SRPSalt:            in.SRPSalt,
-			SRPVerifier:        in.SRPVerifier,
-			BcryptSalt:         in.BcryptSalt,
-			CryptoSalt:         cryptoSalt,
-			KEKEncryptedMaster: kekEncMaster,
+			SRPSalt:              in.SRPSalt,
+			SRPVerifier:          in.SRPVerifier,
+			BcryptSalt:           in.BcryptSalt,
+			CryptoSalt:           cryptoSalt,
+			KEKEncryptedMaster:   kekEncMaster,
+			KEKEncryptedRecovery: kekEncRecovery,
+			RecoverySalt:         recSalt,
 		})
 		if err != nil {
 			if errors.Is(err, authuc.ErrResetTokenInvalid) {

@@ -50,7 +50,11 @@ func MustUserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 func RateLimitMiddleware(rl RateLimiter, keyFn func(*http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			allowed, _ := rl.Allow(r.Context(), keyFn(r))
+			allowed, err := rl.Allow(r.Context(), keyFn(r))
+			if err != nil {
+				WriteError(w, http.StatusServiceUnavailable, "service unavailable")
+				return
+			}
 			if !allowed {
 				WriteError(w, http.StatusTooManyRequests, "rate limit exceeded")
 				return

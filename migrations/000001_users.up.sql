@@ -7,6 +7,9 @@ CREATE TABLE users (
     crypto_salt           BYTEA       NOT NULL,
     public_key            BYTEA,
     encrypted_private_key BYTEA,
+    kek_encrypted_master  BYTEA,
+    kek_encrypted_recovery BYTEA,
+    recovery_salt         BYTEA,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT chk_users_email_length CHECK (char_length(email) BETWEEN 3 AND 320)
 );

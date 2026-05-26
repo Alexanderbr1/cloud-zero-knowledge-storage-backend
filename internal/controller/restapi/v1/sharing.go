@@ -96,6 +96,10 @@ func createShare(d Deps) http.HandlerFunc {
 				restapi.WriteError(w, http.StatusBadRequest, "invalid expires_at (must be RFC3339)")
 				return
 			}
+			if !t.After(time.Now()) {
+				restapi.WriteError(w, http.StatusBadRequest, "expires_at must be in the future")
+				return
+			}
 			expiresAt = &t
 		}
 
@@ -175,6 +179,8 @@ func getSharedFile(d Deps) http.HandlerFunc {
 			writeSharingErr(w, err, d.Logger)
 			return
 		}
+		blobID := result.Share.BlobID
+		d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFileDownloadedViaShare, realIP(r), r.Header.Get("User-Agent"), &blobID, result.Share.BlobFileName))
 		fileIVB64 := base64.StdEncoding.EncodeToString(result.FileIV)
 		restapi.WriteJSON(w, http.StatusOK, shareToDTO(result.Share, result.DownloadURL, fileIVB64))
 	}
@@ -226,18 +232,16 @@ func writeSharingErr(w http.ResponseWriter, err error, log zerolog.Logger) {
 	switch {
 	case errors.Is(err, sharinguc.ErrNotFound):
 		restapi.WriteError(w, http.StatusNotFound, "not found")
-	case errors.Is(err, sharinguc.ErrForbidden):
-		restapi.WriteError(w, http.StatusForbidden, "forbidden")
 	case errors.Is(err, sharinguc.ErrNoPublicKey):
 		restapi.WriteError(w, http.StatusUnprocessableEntity, "recipient has no encryption key")
-	case errors.Is(err, sharinguc.ErrExpired):
-		restapi.WriteError(w, http.StatusGone, "share expired")
-	case errors.Is(err, sharinguc.ErrRevoked):
-		restapi.WriteError(w, http.StatusGone, "share revoked")
 	case errors.Is(err, sharinguc.ErrDuplicateShare):
 		restapi.WriteError(w, http.StatusConflict, "share already exists for this recipient")
 	case errors.Is(err, sharinguc.ErrSelfShare):
 		restapi.WriteError(w, http.StatusBadRequest, "cannot share a file with yourself")
+	case errors.Is(err, sharinguc.ErrForbidden),
+		errors.Is(err, sharinguc.ErrExpired),
+		errors.Is(err, sharinguc.ErrRevoked):
+		restapi.WriteError(w, http.StatusForbidden, "forbidden")
 	default:
 		restapi.WriteInternalError(w, log, err)
 	}

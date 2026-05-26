@@ -41,10 +41,10 @@ type TokenResponse struct {
 	ExpiresIn           int64  `json:"expires_in"`
 	RefreshExpiresIn    int64  `json:"refresh_expires_in"`
 	TokenType           string `json:"token_type"`
-	M2                  string `json:"M2,omitempty"`                     // login-finalize only; client must verify
-	EncryptedPrivateKey string `json:"encrypted_private_key,omitempty"`  // login-finalize only
-	KEKEncryptedMaster  string `json:"kek_encrypted_master,omitempty"`   // login-finalize only
-	ClientKey           string `json:"client_key,omitempty"`             // base64 AES-GCM key for password blob persistence
+	M2                  string `json:"M2,omitempty"`                    // login-finalize only; client must verify
+	EncryptedPrivateKey string `json:"encrypted_private_key,omitempty"` // login-finalize only
+	KEKEncryptedMaster  string `json:"kek_encrypted_master,omitempty"`  // login-finalize only
+	ClientKey           string `json:"client_key,omitempty"`            // base64 AES-GCM key for password blob persistence
 }
 
 type ResetPasswordRequestRequest struct {
@@ -61,11 +61,13 @@ type RecoveryDataResponse struct {
 }
 
 type ResetPasswordConfirmRequest struct {
-	Token                string `json:"token"                  validate:"required"`
-	SRPSalt              string `json:"srp_salt"               validate:"required"`
-	SRPVerifier          string `json:"srp_verifier"           validate:"required"`
-	BcryptSalt           string `json:"bcrypt_salt"            validate:"required"`
-	CryptoSalt           string `json:"crypto_salt"            validate:"required"`
-	KEKEncryptedMaster   string `json:"kek_encrypted_master"   validate:"required"`
+	Token              string `json:"token"                    validate:"required"`
+	SRPSalt            string `json:"srp_salt"                 validate:"required"`
+	SRPVerifier        string `json:"srp_verifier"             validate:"required"`
+	BcryptSalt         string `json:"bcrypt_salt"              validate:"required"`
+	CryptoSalt         string `json:"crypto_salt"              validate:"required"`
+	KEKEncryptedMaster string `json:"kek_encrypted_master"     validate:"required"`
+	// New recovery material — rotated on every password reset (single-use phrase model).
+	KEKEncryptedRecovery string `json:"kek_encrypted_recovery"   validate:"required"`
+	RecoverySalt         string `json:"recovery_salt"            validate:"required"`
 }
-

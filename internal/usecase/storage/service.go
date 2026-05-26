@@ -651,11 +651,8 @@ func sanitizeFileName(name string) string {
 	if name == "" {
 		return "file.bin"
 	}
-	// filepath.Base strips all leading path segments on Unix ('/' separator).
-	// Backslashes are not path separators on Linux, so replace them explicitly
-	// to handle filenames coming from Windows clients.
+	name = strings.ReplaceAll(name, "\\", "/")
 	name = filepath.Base(name)
-	name = strings.ReplaceAll(name, "\\", "_")
 	if name == "." || name == ".." {
 		return "file.bin"
 	}

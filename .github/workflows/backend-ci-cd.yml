@@ -57,7 +57,7 @@ jobs:
           args: --timeout=5m
 
       - name: Go test
-        run: go test ./...
+        run: go test -race ./...
 
       - name: Go build
         run: go build -o /tmp/app ./cmd/app

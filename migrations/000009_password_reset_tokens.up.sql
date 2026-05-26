@@ -1,8 +1,3 @@
-ALTER TABLE users
-    ADD COLUMN kek_encrypted_master   BYTEA,
-    ADD COLUMN kek_encrypted_recovery BYTEA,
-    ADD COLUMN recovery_salt          BYTEA;
-
 CREATE TABLE password_reset_tokens (
     id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id    UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,

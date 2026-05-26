@@ -72,10 +72,13 @@ func (s *Storage) UpdateCredentialsAndKEK(ctx context.Context, userID uuid.UUID,
 	_, err := s.pool.Exec(ctx,
 		`UPDATE users
 		 SET srp_salt = $2, srp_verifier = $3, bcrypt_salt = $4, crypto_salt = $5,
-		     kek_encrypted_master = $6
+		     kek_encrypted_master = $6,
+		     kek_encrypted_recovery = $7, recovery_salt = $8
 		 WHERE id = $1`,
 		userID, p.SRPSalt, p.SRPVerifier, p.BcryptSalt, p.CryptoSalt,
 		nullableBytes(p.KEKEncryptedMaster),
+		nullableBytes(p.KEKEncryptedRecovery),
+		nullableBytes(p.RecoverySalt),
 	)
 	return err
 }

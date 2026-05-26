@@ -47,11 +47,13 @@ type RecoveryData struct {
 }
 
 type ResetPasswordParams struct {
-	SRPSalt            string
-	SRPVerifier        string
-	BcryptSalt         string
-	CryptoSalt         []byte
-	KEKEncryptedMaster []byte
+	SRPSalt              string
+	SRPVerifier          string
+	BcryptSalt           string
+	CryptoSalt           []byte
+	KEKEncryptedMaster   []byte
+	KEKEncryptedRecovery []byte
+	RecoverySalt         []byte
 }
 
 type RefreshSessionParams struct {
