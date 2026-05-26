@@ -220,7 +220,7 @@ func TestRegister_EmailNormalized(t *testing.T) {
 		onCreateUser: func(p authuc.NewUserParams) { createdEmail = p.Email },
 	}
 
-	f.svc.Register(context.Background(), authuc.RegisterParams{
+	_, _ = f.svc.Register(context.Background(), authuc.RegisterParams{
 		Email: "  Alice@Example.COM  ",
 	})
 	if createdEmail != "alice@example.com" {

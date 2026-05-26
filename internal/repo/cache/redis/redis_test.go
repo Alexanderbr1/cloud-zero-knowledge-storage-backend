@@ -178,7 +178,9 @@ func TestBlocklist_TTLExpiry(t *testing.T) {
 	id := uuid.New()
 	ctx := context.Background()
 
-	bl.Block(ctx, id, time.Minute)
+	if err := bl.Block(ctx, id, time.Minute); err != nil {
+		t.Fatalf("Block: %v", err)
+	}
 	mr.FastForward(2 * time.Minute)
 
 	blocked, err := bl.IsBlocked(ctx, id)

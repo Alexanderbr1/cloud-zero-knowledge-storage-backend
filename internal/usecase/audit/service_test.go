@@ -175,19 +175,11 @@ func TestLogAsync_RetriesThreeTimes_ThenGivesUp(t *testing.T) {
 }
 
 func TestLogAsync_SucceedsOnSecondAttempt_StopsRetrying(t *testing.T) {
-	var calls atomic.Int64
-	// Fail the first insert, succeed on subsequent ones.
-	repo := &mockAuditRepo{}
-	repo.mu.Lock()
-	repo.insertErr = errors.New("transient")
-	repo.mu.Unlock()
-
 	// We override insertErr after first call using a custom mock.
 	custom := &countingRepo{failFirst: true}
 	svcCustom := &audit.Service{Repo: custom, Logger: zerolog.Nop()}
 
 	svcCustom.LogAsync(context.Background(), entity.AuditEvent{EventType: entity.AuditFileUploaded})
-	_ = calls // prevent unused warning
 
 	// Wait for goroutine to complete (success on 2nd attempt: ~500ms).
 	deadline := time.Now().Add(3 * time.Second)

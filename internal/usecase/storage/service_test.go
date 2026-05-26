@@ -24,8 +24,6 @@ func mustURL(s string) *url.URL {
 	return u
 }
 
-func ptr[T any](v T) *T { return &v }
-
 // ─── mockObjectStore ──────────────────────────────────────────────────────────
 
 type mockObjectStore struct {
