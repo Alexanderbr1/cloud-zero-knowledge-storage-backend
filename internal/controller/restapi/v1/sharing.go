@@ -180,7 +180,8 @@ func getSharedFile(d Deps) http.HandlerFunc {
 			return
 		}
 		blobID := result.Share.BlobID
-		d.Audit.LogAsync(r.Context(), auditEvent(uid, entity.AuditFileDownloadedViaShare, realIP(r), r.Header.Get("User-Agent"), &blobID, result.Share.BlobFileName))
+		// Log under the owner's ID — they need to see who downloaded their shared file.
+		d.Audit.LogAsync(r.Context(), auditEvent(result.Share.OwnerID, entity.AuditFileDownloadedViaShare, realIP(r), r.Header.Get("User-Agent"), &blobID, result.Share.BlobFileName))
 		fileIVB64 := base64.StdEncoding.EncodeToString(result.FileIV)
 		restapi.WriteJSON(w, http.StatusOK, shareToDTO(result.Share, result.DownloadURL, fileIVB64))
 	}
