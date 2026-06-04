@@ -26,9 +26,11 @@ func (s *Storage) GetUserStorageUsed(ctx context.Context, userID uuid.UUID) (int
 
 func (s *Storage) RegisterBlob(ctx context.Context, p storageuc.RegisterBlobParams) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO stored_blobs (id, user_id, file_name, content_type, object_key, file_size, encrypted_file_key, file_iv, folder_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		p.ID, p.UserID, p.FileName, p.ContentType, p.ObjectKey, p.FileSize, p.EncryptedFileKey, p.FileIV, p.FolderID,
+		`INSERT INTO stored_blobs
+		 (id, user_id, file_name, content_type, object_key, file_size, file_size_plain, chunk_size, encrypted_file_key, folder_id, upload_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''))`,
+		p.ID, p.UserID, p.FileName, p.ContentType, p.ObjectKey, p.FileSize,
+		p.FileSizePlain, p.ChunkSize, p.EncryptedFileKey, p.FolderID, p.UploadID,
 	)
 	return err
 }
@@ -36,10 +38,10 @@ func (s *Storage) RegisterBlob(ctx context.Context, p storageuc.RegisterBlobPara
 func (s *Storage) GetBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (storageuc.BlobMeta, bool, error) {
 	var m storageuc.BlobMeta
 	err := s.pool.QueryRow(ctx,
-		`SELECT object_key, content_type, encrypted_file_key, file_iv, file_name
+		`SELECT object_key, content_type, encrypted_file_key, file_name, file_size, file_size_plain, chunk_size
 		 FROM stored_blobs WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL AND uploaded_at IS NOT NULL`,
 		blobID, userID,
-	).Scan(&m.ObjectKey, &m.ContentType, &m.EncryptedFileKey, &m.FileIV, &m.FileName)
+	).Scan(&m.ObjectKey, &m.ContentType, &m.EncryptedFileKey, &m.FileName, &m.FileSize, &m.FileSizePlain, &m.ChunkSize)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return storageuc.BlobMeta{}, false, nil
 	}
@@ -67,7 +69,7 @@ func (s *Storage) RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (obj
 
 func (s *Storage) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, file_iv
+		`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, chunk_size, file_size_plain
 		 FROM stored_blobs
 		 WHERE user_id = $1 AND deleted_at IS NULL AND uploaded_at IS NOT NULL
 		 ORDER BY created_at DESC`,
@@ -87,7 +89,7 @@ func (s *Storage) ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folde
 	)
 	if folderID == nil {
 		rows, err = s.pool.Query(ctx,
-			`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, file_iv
+			`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, chunk_size, file_size_plain
 			 FROM stored_blobs
 			 WHERE user_id = $1 AND folder_id IS NULL AND deleted_at IS NULL AND uploaded_at IS NOT NULL
 			 ORDER BY created_at DESC`,
@@ -95,7 +97,7 @@ func (s *Storage) ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folde
 		)
 	} else {
 		rows, err = s.pool.Query(ctx,
-			`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, file_iv
+			`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, chunk_size, file_size_plain
 			 FROM stored_blobs
 			 WHERE user_id = $1 AND folder_id = $2 AND deleted_at IS NULL AND uploaded_at IS NOT NULL
 			 ORDER BY created_at DESC`,
@@ -113,7 +115,7 @@ func scanBlobs(rows pgx.Rows, userID uuid.UUID) ([]entity.Blob, error) {
 	var out []entity.Blob
 	for rows.Next() {
 		b := entity.Blob{UserID: userID}
-		if err := rows.Scan(&b.ID, &b.FolderID, &b.FileName, &b.ContentType, &b.ObjectKey, &b.FileSize, &b.CreatedAt, &b.EncryptedFileKey, &b.FileIV); err != nil {
+		if err := rows.Scan(&b.ID, &b.FolderID, &b.FileName, &b.ContentType, &b.ObjectKey, &b.FileSize, &b.CreatedAt, &b.EncryptedFileKey, &b.ChunkSize, &b.FileSizePlain); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
@@ -164,7 +166,7 @@ func (s *Storage) RenameBlob(ctx context.Context, blobID, userID uuid.UUID, name
 func (s *Storage) SearchBlobs(ctx context.Context, userID uuid.UUID, query string) ([]storageuc.SearchBlobRecord, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT b.id, b.folder_id, b.file_name, b.content_type, b.object_key, b.file_size,
-		        b.created_at, b.encrypted_file_key, b.file_iv, f.name AS folder_name
+		        b.created_at, b.encrypted_file_key, b.chunk_size, b.file_size_plain, f.name AS folder_name
 		 FROM stored_blobs b
 		 LEFT JOIN folders f ON f.id = b.folder_id
 		 WHERE b.user_id = $1 AND b.file_name ILIKE $2 ESCAPE '\' AND b.deleted_at IS NULL AND b.uploaded_at IS NOT NULL
@@ -186,7 +188,8 @@ func scanSearchBlobs(rows pgx.Rows, userID uuid.UUID) ([]storageuc.SearchBlobRec
 		rec.UserID = userID
 		if err := rows.Scan(
 			&rec.ID, &rec.FolderID, &rec.FileName, &rec.ContentType, &rec.ObjectKey,
-			&rec.FileSize, &rec.CreatedAt, &rec.EncryptedFileKey, &rec.FileIV, &rec.FolderName,
+			&rec.FileSize, &rec.CreatedAt, &rec.EncryptedFileKey,
+			&rec.ChunkSize, &rec.FileSizePlain, &rec.FolderName,
 		); err != nil {
 			return nil, err
 		}
@@ -197,11 +200,15 @@ func scanSearchBlobs(rows pgx.Rows, userID uuid.UUID) ([]storageuc.SearchBlobRec
 
 func (s *Storage) GetPendingBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (storageuc.PendingBlobMeta, bool, error) {
 	var m storageuc.PendingBlobMeta
+	var uploadID *string
 	err := s.pool.QueryRow(ctx,
-		`SELECT object_key, file_size, file_name, folder_id FROM stored_blobs
+		`SELECT object_key, file_size, file_name, folder_id, upload_id FROM stored_blobs
 		 WHERE id = $1 AND user_id = $2 AND uploaded_at IS NULL AND deleted_at IS NULL`,
 		blobID, userID,
-	).Scan(&m.ObjectKey, &m.DeclaredSize, &m.FileName, &m.FolderID)
+	).Scan(&m.ObjectKey, &m.DeclaredSize, &m.FileName, &m.FolderID, &uploadID)
+	if uploadID != nil {
+		m.UploadID = *uploadID
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return storageuc.PendingBlobMeta{}, false, nil
 	}
@@ -223,18 +230,50 @@ func (s *Storage) ConfirmBlobUploadWithSize(ctx context.Context, blobID, userID 
 	return tag.RowsAffected() > 0, nil
 }
 
-func (s *Storage) PurgeOrphanedBlobs(ctx context.Context, before time.Time) ([]string, error) {
+func (s *Storage) AbortPendingBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey, uploadID string, ok bool, err error) {
+	var uid *string
+	err = s.pool.QueryRow(ctx,
+		`DELETE FROM stored_blobs
+		 WHERE id = $1 AND user_id = $2 AND uploaded_at IS NULL AND deleted_at IS NULL
+		 RETURNING object_key, upload_id`,
+		blobID, userID,
+	).Scan(&objectKey, &uid)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	if uid != nil {
+		uploadID = *uid
+	}
+	return objectKey, uploadID, true, nil
+}
+
+func (s *Storage) PurgeOrphanedBlobs(ctx context.Context, before time.Time) ([]storageuc.OrphanedBlob, error) {
 	rows, err := s.pool.Query(ctx,
 		`DELETE FROM stored_blobs
 		 WHERE uploaded_at IS NULL AND deleted_at IS NULL AND created_at < $1
-		 RETURNING object_key`,
+		 RETURNING object_key, upload_id`,
 		before,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanObjectKeys(rows)
+	var out []storageuc.OrphanedBlob
+	for rows.Next() {
+		var b storageuc.OrphanedBlob
+		var uploadID *string
+		if err := rows.Scan(&b.ObjectKey, &uploadID); err != nil {
+			return nil, err
+		}
+		if uploadID != nil {
+			b.UploadID = *uploadID
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
 }
 
 func (s *Storage) TrashBlob(ctx context.Context, blobID, userID uuid.UUID) (fileName string, ok bool, err error) {
@@ -295,7 +334,7 @@ func (s *Storage) HardDeleteBlob(ctx context.Context, blobID, userID uuid.UUID) 
 func (s *Storage) ListTrashedBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, folder_id, file_name, content_type, object_key, file_size,
-		        created_at, encrypted_file_key, file_iv
+		        created_at, encrypted_file_key, chunk_size, file_size_plain
 		 FROM stored_blobs b
 		 WHERE b.user_id = $1
 		   AND b.deleted_at IS NOT NULL

@@ -24,7 +24,6 @@ func TestFavoritesList_HappyPath(t *testing.T) {
 					FileName:         "report.pdf",
 					ContentType:      "application/pdf",
 					EncryptedFileKey: make([]byte, 32),
-					FileIV:           make([]byte, 12),
 					CreatedAt:        time.Now(),
 				},
 				FolderName: &folderName,

@@ -10,7 +10,7 @@ import (
 )
 
 // clientEphemeral generates a random SRP client ephemeral pair (a, A).
-func clientEphemeral(t *testing.T) (a, A *big.Int) {
+func clientEphemeral(t testing.TB) (a, A *big.Int) {
 	t.Helper()
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {

@@ -2,23 +2,6 @@ package dto
 
 import "time"
 
-type PresignPutRequest struct {
-	FileName         string  `json:"file_name"          validate:"required,max=512"`
-	ContentType      string  `json:"content_type"       validate:"required,min=1,max=128"`
-	EncryptedFileKey string  `json:"encrypted_file_key" validate:"required"` // base64
-	FileIV           string  `json:"file_iv"            validate:"required"` // base64
-	FolderID         *string `json:"folder_id"`
-	FileSize         int64   `json:"file_size"           validate:"required,min=1"`
-}
-
-type PresignPutResponse struct {
-	BlobID      string `json:"blob_id"`
-	UploadURL   string `json:"upload_url"`
-	ExpiresIn   int64  `json:"expires_in"`
-	HTTPMethod  string `json:"http_method"`
-	ContentType string `json:"content_type"`
-}
-
 type PresignGetResponse struct {
 	BlobID           string `json:"blob_id"`
 	DownloadURL      string `json:"download_url"`
@@ -26,7 +9,9 @@ type PresignGetResponse struct {
 	HTTPMethod       string `json:"http_method"`
 	ContentType      string `json:"content_type"`
 	EncryptedFileKey string `json:"encrypted_file_key"` // base64
-	FileIV           string `json:"file_iv"`            // base64
+	FileSize         int64  `json:"file_size"`
+	FileSizePlain    int64  `json:"file_size_plain"`
+	ChunkSize        int32  `json:"chunk_size"`
 }
 
 type BlobItem struct {
@@ -35,14 +20,41 @@ type BlobItem struct {
 	FileName         string    `json:"file_name"`
 	ContentType      string    `json:"content_type"`
 	FileSize         int64     `json:"file_size"`
+	FileSizePlain    int64     `json:"file_size_plain"`
+	ChunkSize        int32     `json:"chunk_size"`
 	CreatedAt        time.Time `json:"created_at"`
 	EncryptedFileKey string    `json:"encrypted_file_key"` // base64
-	FileIV           string    `json:"file_iv"`            // base64
 }
 
 type ListBlobsResponse struct {
 	Items []BlobItem `json:"items"`
 }
+
+// ─── Multipart upload ─────────────────────────────────────────────────────────
+
+type InitiateMultipartRequest struct {
+	FileName         string  `json:"file_name"          validate:"required,max=512"`
+	ContentType      string  `json:"content_type"       validate:"required,min=1,max=128"`
+	EncryptedFileKey string  `json:"encrypted_file_key" validate:"required"`
+	FileSize         int64   `json:"file_size"          validate:"required,min=1"`
+	FileSizePlain    int64   `json:"file_size_plain"    validate:"required,min=1"`
+	ChunkSize        int32   `json:"chunk_size"         validate:"required,min=1"`
+	PartCount        int     `json:"part_count"         validate:"required,min=1,max=10000"`
+	FolderID         *string `json:"folder_id"`
+}
+
+type PartURLItem struct {
+	PartNumber int    `json:"part_number"`
+	URL        string `json:"url"`
+}
+
+type InitiateMultipartResponse struct {
+	BlobID   string        `json:"blob_id"`
+	UploadID string        `json:"upload_id"`
+	PartURLs []PartURLItem `json:"part_urls"`
+}
+
+// ─── Move / Rename ────────────────────────────────────────────────────────────
 
 type MoveBlobRequest struct {
 	FolderID *string `json:"folder_id"` // null = move to root
@@ -66,9 +78,10 @@ type SearchBlobItem struct {
 	FileName         string    `json:"file_name"`
 	ContentType      string    `json:"content_type"`
 	FileSize         int64     `json:"file_size"`
+	FileSizePlain    int64     `json:"file_size_plain"`
+	ChunkSize        int32     `json:"chunk_size"`
 	CreatedAt        time.Time `json:"created_at"`
 	EncryptedFileKey string    `json:"encrypted_file_key"` // base64
-	FileIV           string    `json:"file_iv"`            // base64
 }
 
 type SearchResponse struct {
@@ -99,9 +112,10 @@ type TrashBlobItem struct {
 	FileName         string    `json:"file_name"`
 	ContentType      string    `json:"content_type"`
 	FileSize         int64     `json:"file_size"`
+	FileSizePlain    int64     `json:"file_size_plain"`
+	ChunkSize        int32     `json:"chunk_size"`
 	CreatedAt        time.Time `json:"created_at"`
 	EncryptedFileKey string    `json:"encrypted_file_key"` // base64
-	FileIV           string    `json:"file_iv"`            // base64
 }
 
 type TrashFolderItem struct {

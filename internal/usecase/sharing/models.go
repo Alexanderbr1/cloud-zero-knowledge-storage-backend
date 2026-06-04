@@ -9,11 +9,13 @@ import (
 )
 
 type BlobInfo struct {
-	ObjectKey   string
-	FileName    string
-	ContentType string
-	FileIV      []byte
-	OwnerID     uuid.UUID
+	ObjectKey     string
+	FileName      string
+	ContentType   string
+	FileSize      int64
+	FileSizePlain int64
+	ChunkSize     int32
+	OwnerID       uuid.UUID
 }
 
 type CreateShareParams struct {
@@ -27,9 +29,11 @@ type CreateShareParams struct {
 }
 
 type SharedFileResult struct {
-	Share       entity.FileShareView
-	DownloadURL string
-	FileIV      []byte
-	FileName    string
-	ContentType string
+	Share         entity.FileShareView
+	DownloadURL   string
+	FileName      string
+	ContentType   string
+	FileSize      int64
+	FileSizePlain int64
+	ChunkSize     int32
 }

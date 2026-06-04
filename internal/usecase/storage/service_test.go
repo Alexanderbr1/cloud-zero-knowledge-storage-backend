@@ -29,8 +29,6 @@ func mustURL(s string) *url.URL {
 type mockObjectStore struct {
 	mu            sync.Mutex
 	removedKeys   []string
-	presignPutURL *url.URL
-	presignPutErr error
 	presignGetURL *url.URL
 	presignGetErr error
 	removeErr     error
@@ -39,15 +37,6 @@ type mockObjectStore struct {
 }
 
 func (m *mockObjectStore) EnsureBucket(_ context.Context) error { return nil }
-func (m *mockObjectStore) PresignedPutObject(_ context.Context, _ string, _ time.Duration) (*url.URL, error) {
-	if m.presignPutErr != nil {
-		return nil, m.presignPutErr
-	}
-	if m.presignPutURL != nil {
-		return m.presignPutURL, nil
-	}
-	return mustURL("https://s3.example.com/upload"), nil
-}
 func (m *mockObjectStore) PresignedGetObject(_ context.Context, _ string, _ time.Duration) (*url.URL, error) {
 	if m.presignGetErr != nil {
 		return nil, m.presignGetErr
@@ -66,6 +55,15 @@ func (m *mockObjectStore) RemoveObject(_ context.Context, key string) error {
 func (m *mockObjectStore) StatObject(_ context.Context, _ string) (int64, error) {
 	return m.statSize, m.statErr
 }
+func (m *mockObjectStore) NewMultipartUpload(_ context.Context, _ string) (string, error) {
+	return "test-upload-id", nil
+}
+func (m *mockObjectStore) PresignUploadPart(_ context.Context, _, _ string, _ int, _ time.Duration) (*url.URL, error) {
+	u, _ := url.Parse("https://minio/part")
+	return u, nil
+}
+func (m *mockObjectStore) CompleteMultipartUpload(_ context.Context, _, _ string) error { return nil }
+func (m *mockObjectStore) AbortMultipartUpload(_ context.Context, _, _ string) error    { return nil }
 
 // ─── mockBlobRepo ─────────────────────────────────────────────────────────────
 
@@ -91,7 +89,7 @@ type mockBlobRepo struct {
 	renameErr          error
 	searchBlobsResult  []storage.SearchBlobRecord
 	searchBlobsErr     error
-	purgeOrphanedKeys  []string
+	purgeOrphanedKeys  []storage.OrphanedBlob
 	purgeOrphanedErr   error
 	listInFolderResult []entity.Blob
 	listInFolderErr    error
@@ -109,7 +107,7 @@ func (m *mockBlobRepo) GetPendingBlobMeta(_ context.Context, _, _ uuid.UUID) (st
 func (m *mockBlobRepo) ConfirmBlobUploadWithSize(_ context.Context, _, _ uuid.UUID, _ int64) (bool, error) {
 	return m.confirmOk, m.confirmErr
 }
-func (m *mockBlobRepo) PurgeOrphanedBlobs(_ context.Context, _ time.Time) ([]string, error) {
+func (m *mockBlobRepo) PurgeOrphanedBlobs(_ context.Context, _ time.Time) ([]storage.OrphanedBlob, error) {
 	return m.purgeOrphanedKeys, m.purgeOrphanedErr
 }
 func (m *mockBlobRepo) GetBlobMeta(_ context.Context, _, _ uuid.UUID) (storage.BlobMeta, bool, error) {
@@ -314,269 +312,6 @@ func TestGetStorageUsage_RepoError(t *testing.T) {
 	_, err := f.svc.GetStorageUsage(context.Background(), uuid.New())
 	if err == nil {
 		t.Fatal("expected error")
-	}
-}
-
-// ─── PresignPut ───────────────────────────────────────────────────────────────
-
-func TestPresignPut_HappyPath(t *testing.T) {
-	f := newFixture()
-
-	result, err := f.svc.PresignPut(context.Background(), storage.PresignPutParams{
-		UserID:   uuid.New(),
-		FileName: "report.pdf",
-		FileSize: 100,
-	})
-	if err != nil {
-		t.Fatalf("PresignPut: %v", err)
-	}
-	if result.BlobID == uuid.Nil {
-		t.Error("expected non-nil BlobID")
-	}
-	if result.UploadURL == "" {
-		t.Error("expected non-empty UploadURL")
-	}
-	if result.HTTPMethod != "PUT" {
-		t.Errorf("HTTPMethod: want PUT, got %s", result.HTTPMethod)
-	}
-}
-
-func TestPresignPut_FileTooLarge(t *testing.T) {
-	f := newFixture()
-	f.svc.MaxUploadBytes = 1024
-
-	_, err := f.svc.PresignPut(context.Background(), storage.PresignPutParams{
-		UserID:   uuid.New(),
-		FileSize: 2048,
-	})
-	if !errors.Is(err, storage.ErrFileTooLarge) {
-		t.Fatalf("want ErrFileTooLarge, got %v", err)
-	}
-}
-
-func TestPresignPut_FileSizeAtLimit_Allowed(t *testing.T) {
-	f := newFixture()
-	f.svc.MaxUploadBytes = 1024
-
-	_, err := f.svc.PresignPut(context.Background(), storage.PresignPutParams{
-		UserID:   uuid.New(),
-		FileSize: 1024, // exactly at limit — must pass
-	})
-	if errors.Is(err, storage.ErrFileTooLarge) {
-		t.Fatal("file at exact limit should be allowed")
-	}
-}
-
-func TestPresignPut_QuotaExceeded(t *testing.T) {
-	f := newFixture()
-	f.svc.QuotaBytes = 1000
-	f.blobs.storageUsed = 900
-
-	_, err := f.svc.PresignPut(context.Background(), storage.PresignPutParams{
-		UserID:   uuid.New(),
-		FileSize: 200, // 900 + 200 = 1100 > 1000
-	})
-	if !errors.Is(err, storage.ErrQuotaExceeded) {
-		t.Fatalf("want ErrQuotaExceeded, got %v", err)
-	}
-}
-
-func TestPresignPut_QuotaExactBoundary_Allowed(t *testing.T) {
-	f := newFixture()
-	f.svc.QuotaBytes = 1000
-	f.blobs.storageUsed = 800
-
-	_, err := f.svc.PresignPut(context.Background(), storage.PresignPutParams{
-		UserID:   uuid.New(),
-		FileSize: 200, // 800 + 200 == 1000 — not strictly greater, must pass
-	})
-	if errors.Is(err, storage.ErrQuotaExceeded) {
-		t.Fatal("used + size == quota should be allowed")
-	}
-}
-
-func TestPresignPut_NoQuotaCheck_WhenQuotaZero(t *testing.T) {
-	f := newFixture()
-	// QuotaBytes = 0 means unlimited — storageUsedErr must never be hit.
-	f.blobs.storageUsedErr = errors.New("should not be called")
-
-	_, err := f.svc.PresignPut(context.Background(), storage.PresignPutParams{
-		UserID:   uuid.New(),
-		FileSize: 999_999_999,
-	})
-	if errors.Is(err, storage.ErrQuotaExceeded) {
-		t.Fatal("quota must not be checked when QuotaBytes is zero")
-	}
-	// any error here would be from storageUsedErr being hit
-	if err != nil && err.Error() == "get storage used: should not be called" {
-		t.Fatal("GetUserStorageUsed must not be called when QuotaBytes is zero")
-	}
-}
-
-func TestPresignPut_FolderNotFound(t *testing.T) {
-	f := newFixture()
-	f.folders.folderOk = false
-
-	folderID := uuid.New()
-	_, err := f.svc.PresignPut(context.Background(), storage.PresignPutParams{
-		UserID:   uuid.New(),
-		FileSize: 100,
-		FolderID: &folderID,
-	})
-	if !errors.Is(err, storage.ErrFolderNotFound) {
-		t.Fatalf("want ErrFolderNotFound, got %v", err)
-	}
-}
-
-func TestPresignPut_RegisterBlobError(t *testing.T) {
-	f := newFixture()
-	f.blobs.registerErr = errors.New("insert failed")
-
-	_, err := f.svc.PresignPut(context.Background(), storage.PresignPutParams{
-		UserID:   uuid.New(),
-		FileSize: 100,
-	})
-	if err == nil {
-		t.Fatal("expected error from RegisterBlob")
-	}
-}
-
-func TestPresignPut_PresignObjectError(t *testing.T) {
-	f := newFixture()
-	f.objects.presignPutErr = errors.New("s3 unavailable")
-
-	_, err := f.svc.PresignPut(context.Background(), storage.PresignPutParams{
-		UserID:   uuid.New(),
-		FileSize: 100,
-	})
-	if err == nil {
-		t.Fatal("expected error from PresignedPutObject")
-	}
-}
-
-// ─── ConfirmUpload ────────────────────────────────────────────────────────────
-
-func TestConfirmUpload_HappyPath(t *testing.T) {
-	f := newFixture()
-	f.blobs.pending = storage.PendingBlobMeta{
-		ObjectKey:    "user/blob1",
-		DeclaredSize: 500,
-		FileName:     "photo.jpg",
-	}
-	f.blobs.pendingFound = true
-	f.objects.statSize = 500 // actual == declared
-	f.blobs.confirmOk = true
-
-	fileName, folderName, err := f.svc.ConfirmUpload(context.Background(), uuid.New(), uuid.New())
-	if err != nil {
-		t.Fatalf("ConfirmUpload: %v", err)
-	}
-	if fileName != "photo.jpg" {
-		t.Errorf("fileName: want photo.jpg, got %s", fileName)
-	}
-	if folderName != "" {
-		t.Errorf("folderName: want empty for root, got %s", folderName)
-	}
-}
-
-func TestConfirmUpload_BlobNotFound(t *testing.T) {
-	f := newFixture()
-	f.blobs.pendingFound = false
-
-	_, _, err := f.svc.ConfirmUpload(context.Background(), uuid.New(), uuid.New())
-	if !errors.Is(err, storage.ErrNotFound) {
-		t.Fatalf("want ErrNotFound, got %v", err)
-	}
-}
-
-func TestConfirmUpload_StatObjectError(t *testing.T) {
-	f := newFixture()
-	f.blobs.pendingFound = true
-	f.blobs.pending = storage.PendingBlobMeta{ObjectKey: "user/blob"}
-	f.objects.statErr = errors.New("s3 unreachable")
-
-	_, _, err := f.svc.ConfirmUpload(context.Background(), uuid.New(), uuid.New())
-	if err == nil {
-		t.Fatal("expected error from StatObject")
-	}
-}
-
-func TestConfirmUpload_SizeMismatch_QuotaExceeded_DeletesObject(t *testing.T) {
-	f := newFixture()
-	objectKey := "user/blob-big"
-	f.blobs.pendingFound = true
-	f.blobs.pending = storage.PendingBlobMeta{
-		ObjectKey:    objectKey,
-		DeclaredSize: 100,
-	}
-	f.objects.statSize = 900  // actual > declared
-	f.svc.QuotaBytes = 1000   // quota is 1000
-	f.blobs.storageUsed = 900 // used (includes declared 100) → actual pushes to 1700
-
-	// used - declared + actual = 900 - 100 + 900 = 1700 > 1000 → quota exceeded
-	_, _, err := f.svc.ConfirmUpload(context.Background(), uuid.New(), uuid.New())
-	if !errors.Is(err, storage.ErrQuotaExceeded) {
-		t.Fatalf("want ErrQuotaExceeded, got %v", err)
-	}
-
-	// object must be removed to free space
-	if len(f.objects.removedKeys) == 0 || f.objects.removedKeys[0] != objectKey {
-		t.Error("object must be deleted from S3 when quota is exceeded on confirm")
-	}
-}
-
-func TestConfirmUpload_SizeMismatch_WithinQuota_Passes(t *testing.T) {
-	f := newFixture()
-	f.blobs.pendingFound = true
-	f.blobs.pending = storage.PendingBlobMeta{
-		ObjectKey:    "user/blob",
-		DeclaredSize: 100,
-	}
-	f.objects.statSize = 200 // actual > declared, but still within quota
-	f.svc.QuotaBytes = 10_000
-	f.blobs.storageUsed = 300 // 300 - 100 + 200 = 400 < 10000 → ok
-	f.blobs.confirmOk = true
-
-	_, _, err := f.svc.ConfirmUpload(context.Background(), uuid.New(), uuid.New())
-	if errors.Is(err, storage.ErrQuotaExceeded) {
-		t.Fatal("should pass when adjusted usage is within quota")
-	}
-}
-
-func TestConfirmUpload_ConfirmReturnsFalse(t *testing.T) {
-	f := newFixture()
-	f.blobs.pendingFound = true
-	f.blobs.pending = storage.PendingBlobMeta{ObjectKey: "k", DeclaredSize: 10}
-	f.objects.statSize = 10
-	f.blobs.confirmOk = false // race: another request confirmed first
-
-	_, _, err := f.svc.ConfirmUpload(context.Background(), uuid.New(), uuid.New())
-	if !errors.Is(err, storage.ErrNotFound) {
-		t.Fatalf("want ErrNotFound when confirm returns false, got %v", err)
-	}
-}
-
-func TestConfirmUpload_WithFolder_EnrichersFolderName(t *testing.T) {
-	f := newFixture()
-	folderID := uuid.New()
-	f.blobs.pendingFound = true
-	f.blobs.pending = storage.PendingBlobMeta{
-		ObjectKey:    "u/b",
-		DeclaredSize: 10,
-		FileName:     "doc.pdf",
-		FolderID:     &folderID,
-	}
-	f.objects.statSize = 10
-	f.blobs.confirmOk = true
-	f.folders.folder = entity.Folder{ID: folderID, Name: "Documents"}
-	f.folders.folderOk = true
-
-	_, folderName, err := f.svc.ConfirmUpload(context.Background(), uuid.New(), uuid.New())
-	if err != nil {
-		t.Fatalf("ConfirmUpload: %v", err)
-	}
-	if folderName != "Documents" {
-		t.Errorf("folderName: want Documents, got %q", folderName)
 	}
 }
 

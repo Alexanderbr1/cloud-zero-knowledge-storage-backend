@@ -43,10 +43,10 @@ func (s *Storage) GetPublicKeyByEmail(ctx context.Context, email string) ([]byte
 func (s *Storage) GetBlobInfo(ctx context.Context, blobID uuid.UUID) (sharinguc.BlobInfo, bool, error) {
 	var info sharinguc.BlobInfo
 	err := s.pool.QueryRow(ctx,
-		`SELECT object_key, file_name, content_type, file_iv, user_id
+		`SELECT object_key, file_name, content_type, file_size, file_size_plain, chunk_size, user_id
 		 FROM stored_blobs WHERE id = $1 AND deleted_at IS NULL`,
 		blobID,
-	).Scan(&info.ObjectKey, &info.FileName, &info.ContentType, &info.FileIV, &info.OwnerID)
+	).Scan(&info.ObjectKey, &info.FileName, &info.ContentType, &info.FileSize, &info.FileSizePlain, &info.ChunkSize, &info.OwnerID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return sharinguc.BlobInfo{}, false, nil
 	}

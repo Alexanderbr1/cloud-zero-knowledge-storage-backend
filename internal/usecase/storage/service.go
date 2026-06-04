@@ -16,10 +16,13 @@ import (
 
 type ObjectStore interface {
 	EnsureBucket(ctx context.Context) error
-	PresignedPutObject(ctx context.Context, objectKey string, expiry time.Duration) (*url.URL, error)
 	PresignedGetObject(ctx context.Context, objectKey string, expiry time.Duration) (*url.URL, error)
 	RemoveObject(ctx context.Context, objectKey string) error
 	StatObject(ctx context.Context, objectKey string) (int64, error)
+	NewMultipartUpload(ctx context.Context, objectKey string) (string, error)
+	PresignUploadPart(ctx context.Context, objectKey, uploadID string, partNumber int, expiry time.Duration) (*url.URL, error)
+	CompleteMultipartUpload(ctx context.Context, objectKey, uploadID string) error
+	AbortMultipartUpload(ctx context.Context, objectKey, uploadID string) error
 }
 
 type BlobRepo interface {
@@ -27,7 +30,7 @@ type BlobRepo interface {
 	RegisterBlob(ctx context.Context, p RegisterBlobParams) error
 	GetPendingBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (PendingBlobMeta, bool, error)
 	ConfirmBlobUploadWithSize(ctx context.Context, blobID, userID uuid.UUID, actualSize int64) (bool, error)
-	PurgeOrphanedBlobs(ctx context.Context, before time.Time) ([]string, error)
+	PurgeOrphanedBlobs(ctx context.Context, before time.Time) ([]OrphanedBlob, error)
 	GetBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (BlobMeta, bool, error)
 	RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error)
 	ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
@@ -36,6 +39,7 @@ type BlobRepo interface {
 	RenameBlob(ctx context.Context, blobID, userID uuid.UUID, name string) (bool, error)
 	SearchBlobs(ctx context.Context, userID uuid.UUID, query string) ([]SearchBlobRecord, error)
 	TrashBlob(ctx context.Context, blobID, userID uuid.UUID) (fileName string, ok bool, err error)
+	AbortPendingBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey, uploadID string, ok bool, err error)
 }
 
 type BlobTrashRepo interface {
@@ -95,64 +99,6 @@ func (s *Service) GetStorageUsage(ctx context.Context, userID uuid.UUID) (Storag
 	return StorageUsage{UsedBytes: used, QuotaBytes: s.QuotaBytes}, nil
 }
 
-func (s *Service) PresignPut(ctx context.Context, p PresignPutParams) (*PresignPutResult, error) {
-	p.ContentType = strings.TrimSpace(p.ContentType)
-	blobID := uuid.New()
-	cleanName := sanitizeFileName(p.FileName)
-	objectKey := fmt.Sprintf("%s/%s", p.UserID, blobID)
-
-	if s.MaxUploadBytes > 0 && p.FileSize > s.MaxUploadBytes {
-		return nil, ErrFileTooLarge
-	}
-
-	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
-	defer dbCancel()
-
-	if s.QuotaBytes > 0 {
-		used, err := s.Blobs.GetUserStorageUsed(dbCtx, p.UserID)
-		if err != nil {
-			return nil, fmt.Errorf("get storage used: %w", err)
-		}
-		if used+p.FileSize > s.QuotaBytes {
-			return nil, ErrQuotaExceeded
-		}
-	}
-
-	if p.FolderID != nil {
-		if err := s.requireFolder(dbCtx, *p.FolderID, p.UserID); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := s.Blobs.RegisterBlob(dbCtx, RegisterBlobParams{
-		ID:               blobID,
-		UserID:           p.UserID,
-		FileName:         cleanName,
-		ContentType:      p.ContentType,
-		ObjectKey:        objectKey,
-		FileSize:         p.FileSize,
-		EncryptedFileKey: p.EncryptedFileKey,
-		FileIV:           p.FileIV,
-		FolderID:         p.FolderID,
-	}); err != nil {
-		return nil, fmt.Errorf("register blob: %w", err)
-	}
-
-	u, err := s.Objects.PresignedPutObject(ctx, objectKey, s.PresignTTL)
-	if err != nil {
-		return nil, fmt.Errorf("presign put: %w", err)
-	}
-
-	return &PresignPutResult{
-		BlobID:      blobID,
-		ObjectKey:   objectKey,
-		UploadURL:   u.String(),
-		ExpiresIn:   int64(s.PresignTTL.Seconds()),
-		HTTPMethod:  "PUT",
-		ContentType: p.ContentType,
-	}, nil
-}
-
 func (s *Service) PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*PresignGetResult, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
@@ -178,8 +124,10 @@ func (s *Service) PresignGet(ctx context.Context, userID, blobID uuid.UUID) (*Pr
 		HTTPMethod:       "GET",
 		ContentType:      meta.ContentType,
 		EncryptedFileKey: meta.EncryptedFileKey,
-		FileIV:           meta.FileIV,
 		FileName:         meta.FileName,
+		FileSize:         meta.FileSize,
+		ChunkSize:        meta.ChunkSize,
+		FileSizePlain:    meta.FileSizePlain,
 	}, nil
 }
 
@@ -526,61 +474,50 @@ func (s *Service) EmptyTrash(ctx context.Context, userID uuid.UUID) ([]EmptiedBl
 	return blobs, folders, nil
 }
 
-func (s *Service) ConfirmUpload(ctx context.Context, userID, blobID uuid.UUID) (fileName, folderName string, err error) {
+func (s *Service) AbortUpload(ctx context.Context, userID, blobID uuid.UUID) error {
 	dbCtx, cancel := context.WithTimeout(ctx, dbTimeout)
 	defer cancel()
 
+	// Read metadata first without deleting.
 	pending, ok, err := s.Blobs.GetPendingBlobMeta(dbCtx, blobID, userID)
 	if err != nil {
-		return "", "", fmt.Errorf("get pending blob: %w", err)
+		return fmt.Errorf("get pending blob: %w", err)
 	}
 	if !ok {
-		return "", "", ErrNotFound
+		return ErrNotFound
 	}
 
-	actualSize, err := s.Objects.StatObject(ctx, pending.ObjectKey)
-	if err != nil {
-		return "", "", fmt.Errorf("stat object: %w", err)
-	}
-
-	if s.QuotaBytes > 0 && actualSize != pending.DeclaredSize {
-		used, err := s.Blobs.GetUserStorageUsed(dbCtx, userID)
-		if err != nil {
-			return "", "", fmt.Errorf("get storage used: %w", err)
+	// Clean up MinIO before removing the DB record. On failure we keep the
+	// record so CleanOrphanedBlobs can retry on the next scheduled run.
+	if pending.UploadID != "" {
+		if err := s.Objects.AbortMultipartUpload(ctx, pending.ObjectKey, pending.UploadID); err != nil {
+			return fmt.Errorf("abort multipart: %w", err)
 		}
-		// used already includes the pending blob's declared size — replace it with actual.
-		if used-pending.DeclaredSize+actualSize > s.QuotaBytes {
-			_ = s.Objects.RemoveObject(ctx, pending.ObjectKey)
-			return "", "", ErrQuotaExceeded
+	} else {
+		if err := s.Objects.RemoveObject(ctx, pending.ObjectKey); err != nil {
+			return fmt.Errorf("remove object: %w", err)
 		}
 	}
 
-	confirmed, err := s.Blobs.ConfirmBlobUploadWithSize(dbCtx, blobID, userID, actualSize)
-	if err != nil {
-		return "", "", fmt.Errorf("confirm upload: %w", err)
+	// MinIO cleaned up — now remove the DB record.
+	if _, _, _, err := s.Blobs.AbortPendingBlob(dbCtx, blobID, userID); err != nil {
+		return fmt.Errorf("delete pending blob: %w", err)
 	}
-	if !confirmed {
-		return "", "", ErrNotFound
-	}
-
-	if pending.FolderID != nil {
-		enrichCtx, enrichCancel := context.WithTimeout(context.Background(), dbTimeout)
-		if folder, ok, ferr := s.Folders.GetFolder(enrichCtx, *pending.FolderID, userID); ferr == nil && ok {
-			folderName = folder.Name
-		}
-		enrichCancel()
-	}
-	return pending.FileName, folderName, nil
+	return nil
 }
 
 func (s *Service) CleanOrphanedBlobs(ctx context.Context, ttl time.Duration) error {
 	before := time.Now().Add(-ttl)
-	keys, err := s.Blobs.PurgeOrphanedBlobs(ctx, before)
+	blobs, err := s.Blobs.PurgeOrphanedBlobs(ctx, before)
 	if err != nil {
 		return fmt.Errorf("purge orphaned blobs: %w", err)
 	}
-	for _, key := range keys {
-		_ = s.Objects.RemoveObject(ctx, key)
+	for _, b := range blobs {
+		if b.UploadID != "" {
+			_ = s.Objects.AbortMultipartUpload(ctx, b.ObjectKey, b.UploadID)
+		} else {
+			_ = s.Objects.RemoveObject(ctx, b.ObjectKey)
+		}
 	}
 	return nil
 }
@@ -642,6 +579,110 @@ func (s *Service) requireFolder(ctx context.Context, folderID, userID uuid.UUID)
 	}
 	if !ok {
 		return ErrFolderNotFound
+	}
+	return nil
+}
+
+// ─── Multipart upload ─────────────────────────────────────────────────────────
+
+func (s *Service) InitiateMultipartUpload(ctx context.Context, p InitiateMultipartParams) (*InitiateMultipartResult, error) {
+	p.ContentType = strings.TrimSpace(p.ContentType)
+	blobID := uuid.New()
+	cleanName := sanitizeFileName(p.FileName)
+	objectKey := fmt.Sprintf("%s/%s", p.UserID, blobID)
+
+	if s.MaxUploadBytes > 0 && p.FileSize > s.MaxUploadBytes {
+		return nil, ErrFileTooLarge
+	}
+
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
+	defer dbCancel()
+
+	if s.QuotaBytes > 0 {
+		used, err := s.Blobs.GetUserStorageUsed(dbCtx, p.UserID)
+		if err != nil {
+			return nil, fmt.Errorf("get storage used: %w", err)
+		}
+		if used+p.FileSize > s.QuotaBytes {
+			return nil, ErrQuotaExceeded
+		}
+	}
+
+	if p.FolderID != nil {
+		if err := s.requireFolder(dbCtx, *p.FolderID, p.UserID); err != nil {
+			return nil, err
+		}
+	}
+
+	uploadID, err := s.Objects.NewMultipartUpload(ctx, objectKey)
+	if err != nil {
+		return nil, fmt.Errorf("initiate multipart: %w", err)
+	}
+
+	if err := s.Blobs.RegisterBlob(dbCtx, RegisterBlobParams{
+		ID:               blobID,
+		UserID:           p.UserID,
+		FileName:         cleanName,
+		ContentType:      p.ContentType,
+		ObjectKey:        objectKey,
+		FileSize:         p.FileSize,
+		FileSizePlain:    p.FileSizePlain,
+		ChunkSize:        p.ChunkSize,
+		EncryptedFileKey: p.EncryptedFileKey,
+		FolderID:         p.FolderID,
+		UploadID:         uploadID,
+	}); err != nil {
+		_ = s.Objects.AbortMultipartUpload(ctx, objectKey, uploadID)
+		return nil, fmt.Errorf("register blob: %w", err)
+	}
+
+	partURLs := make([]PartURL, p.PartCount)
+	for i := range partURLs {
+		u, err := s.Objects.PresignUploadPart(ctx, objectKey, uploadID, i+1, s.PresignTTL)
+		if err != nil {
+			_ = s.Objects.AbortMultipartUpload(ctx, objectKey, uploadID)
+			return nil, fmt.Errorf("presign part %d: %w", i+1, err)
+		}
+		partURLs[i] = PartURL{PartNumber: i + 1, URL: u.String()}
+	}
+
+	return &InitiateMultipartResult{
+		BlobID:   blobID,
+		UploadID: uploadID,
+		PartURLs: partURLs,
+	}, nil
+}
+
+func (s *Service) CompleteMultipartUpload(ctx context.Context, p CompleteMultipartParams) error {
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
+	defer dbCancel()
+
+	meta, ok, err := s.Blobs.GetPendingBlobMeta(dbCtx, p.BlobID, p.UserID)
+	if err != nil {
+		return fmt.Errorf("get pending blob: %w", err)
+	}
+	if !ok {
+		return ErrNotFound
+	}
+	if meta.UploadID == "" {
+		return ErrNotFound
+	}
+
+	if err := s.Objects.CompleteMultipartUpload(ctx, meta.ObjectKey, meta.UploadID); err != nil {
+		return fmt.Errorf("complete multipart: %w", err)
+	}
+
+	actualSize, err := s.Objects.StatObject(ctx, meta.ObjectKey)
+	if err != nil {
+		return fmt.Errorf("stat object: %w", err)
+	}
+
+	confirmed, err := s.Blobs.ConfirmBlobUploadWithSize(dbCtx, p.BlobID, p.UserID, actualSize)
+	if err != nil {
+		return fmt.Errorf("confirm upload: %w", err)
+	}
+	if !confirmed {
+		return ErrNotFound
 	}
 	return nil
 }

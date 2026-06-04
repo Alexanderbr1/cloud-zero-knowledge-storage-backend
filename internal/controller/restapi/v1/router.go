@@ -31,7 +31,7 @@ type Deps struct {
 }
 
 func NewRouter(d Deps) chi.Router {
-	loginRL     := restapi.RateLimitMiddleware(d.LoginRateLimiter, realIP)
+	loginRL := restapi.RateLimitMiddleware(d.LoginRateLimiter, realIP)
 	publicKeyRL := restapi.RateLimitMiddleware(d.PublicKeyRateLimiter, userIDKey)
 
 	r := chi.NewRouter()
@@ -63,11 +63,12 @@ func NewRouter(d Deps) chi.Router {
 			r.Use(middleware.Timeout(30 * time.Minute))
 
 			r.Get("/usage", storageGetUsage(d))
-			r.Post("/presign", storagePresignPut(d))
+			r.Post("/blobs/initiate-multipart", storageInitiateMultipart(d))
 
 			r.Get("/blobs", storageListBlobs(d))
-			r.Post("/blobs/{blobID}/confirm-upload", storageConfirmUpload(d))
+			r.Post("/blobs/{blobID}/complete-multipart", storageCompleteMultipart(d))
 			r.Post("/blobs/{blobID}/presign-get", storagePresignGet(d))
+			r.Delete("/blobs/{blobID}/abort", storageAbortUpload(d))
 			r.Delete("/blobs/{blobID}", storageDeleteBlob(d))
 			r.Patch("/blobs/{blobID}", renameBlob(d))
 			r.Patch("/blobs/{blobID}/folder", moveBlob(d))

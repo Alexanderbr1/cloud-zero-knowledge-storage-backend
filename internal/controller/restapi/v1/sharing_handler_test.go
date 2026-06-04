@@ -209,7 +209,6 @@ func TestGetSharedFile_HappyPath(t *testing.T) {
 			},
 		},
 		DownloadURL: "https://s3.example.com/dl",
-		FileIV:      make([]byte, 12),
 	}
 	sharing := &mockSharingService{sharedFile: result}
 	url := "/shares/" + uuid.New().String()

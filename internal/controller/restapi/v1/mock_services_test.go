@@ -25,11 +25,6 @@ import (
 type mockBlobService struct {
 	usageResult    storageuc.StorageUsage
 	usageErr       error
-	presignPutOut  *storageuc.PresignPutResult
-	presignPutErr  error
-	confirmFile    string
-	confirmFolder  string
-	confirmErr     error
 	presignGetOut  *storageuc.PresignGetResult
 	presignGetErr  error
 	deleteFileName string
@@ -43,12 +38,6 @@ type mockBlobService struct {
 
 func (m *mockBlobService) GetStorageUsage(_ context.Context, _ uuid.UUID) (storageuc.StorageUsage, error) {
 	return m.usageResult, m.usageErr
-}
-func (m *mockBlobService) PresignPut(_ context.Context, _ storageuc.PresignPutParams) (*storageuc.PresignPutResult, error) {
-	return m.presignPutOut, m.presignPutErr
-}
-func (m *mockBlobService) ConfirmUpload(_ context.Context, _, _ uuid.UUID) (string, string, error) {
-	return m.confirmFile, m.confirmFolder, m.confirmErr
 }
 func (m *mockBlobService) PresignGet(_ context.Context, _, _ uuid.UUID) (*storageuc.PresignGetResult, error) {
 	return m.presignGetOut, m.presignGetErr
@@ -67,6 +56,12 @@ func (m *mockBlobService) RenameBlob(_ context.Context, _, _ uuid.UUID, _ string
 }
 func (m *mockBlobService) Search(_ context.Context, _ storageuc.SearchParams) (storageuc.SearchResult, error) {
 	return m.searchResult, m.searchErr
+}
+func (m *mockBlobService) InitiateMultipartUpload(_ context.Context, _ storageuc.InitiateMultipartParams) (*storageuc.InitiateMultipartResult, error) {
+	return &storageuc.InitiateMultipartResult{BlobID: uuid.New(), UploadID: "uid", PartURLs: []storageuc.PartURL{{PartNumber: 1, URL: "https://minio/part"}}}, nil
+}
+func (m *mockBlobService) CompleteMultipartUpload(_ context.Context, _ storageuc.CompleteMultipartParams) error {
+	return nil
 }
 
 // ─── mockFolderService ───────────────────────────────────────────────────────

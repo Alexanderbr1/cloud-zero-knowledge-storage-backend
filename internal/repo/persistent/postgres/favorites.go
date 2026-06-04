@@ -46,7 +46,7 @@ func (s *Storage) RemoveFolderFavorite(ctx context.Context, userID, folderID uui
 func (s *Storage) ListFavoriteBlobs(ctx context.Context, userID uuid.UUID) ([]favoritesuc.FavoriteBlob, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT b.id, b.file_name, b.content_type, b.object_key, b.file_size,
-		        b.created_at, b.encrypted_file_key, b.file_iv, b.folder_id,
+		        b.created_at, b.encrypted_file_key, b.chunk_size, b.file_size_plain, b.folder_id,
 		        f.name AS folder_name
 		 FROM stored_blobs b
 		 JOIN favorites fav ON fav.blob_id = b.id AND fav.user_id = $1
@@ -65,7 +65,7 @@ func (s *Storage) ListFavoriteBlobs(ctx context.Context, userID uuid.UUID) ([]fa
 		var fb favoritesuc.FavoriteBlob
 		if err := rows.Scan(
 			&fb.ID, &fb.FileName, &fb.ContentType, &fb.ObjectKey, &fb.FileSize,
-			&fb.CreatedAt, &fb.EncryptedFileKey, &fb.FileIV, &fb.FolderID,
+			&fb.CreatedAt, &fb.EncryptedFileKey, &fb.ChunkSize, &fb.FileSizePlain, &fb.FolderID,
 			&fb.FolderName,
 		); err != nil {
 			return nil, err

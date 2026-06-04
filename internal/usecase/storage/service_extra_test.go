@@ -26,7 +26,7 @@ func TestPresignGet_HappyPath(t *testing.T) {
 		ContentType:      "image/jpeg",
 		FileName:         "photo.jpg",
 		EncryptedFileKey: []byte("efk=="),
-		FileIV:           []byte("iv=="),
+		ChunkSize:        4194304, FileSizePlain: 100,
 	}
 	f.blobs.blobMetaFound = true
 
@@ -512,7 +512,7 @@ func TestSearch_FolderError_Propagates(t *testing.T) {
 
 func TestCleanOrphanedBlobs_HappyPath_RemovesObjectKeys(t *testing.T) {
 	f := newFixture()
-	f.blobs.purgeOrphanedKeys = []string{"obj/orphan1", "obj/orphan2"}
+	f.blobs.purgeOrphanedKeys = []storage.OrphanedBlob{{ObjectKey: "obj/orphan1"}, {ObjectKey: "obj/orphan2"}}
 
 	if err := f.svc.CleanOrphanedBlobs(ctx, 24*time.Hour); err != nil {
 		t.Fatalf("unexpected error: %v", err)

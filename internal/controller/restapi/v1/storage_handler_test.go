@@ -15,13 +15,6 @@ import (
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-func validPresignBody() string {
-	efk := base64.StdEncoding.EncodeToString(make([]byte, 32))
-	iv := base64.StdEncoding.EncodeToString(make([]byte, 12))
-	return `{"file_name":"test.txt","content_type":"text/plain","file_size":1024,` +
-		`"encrypted_file_key":"` + efk + `","file_iv":"` + iv + `"}`
-}
-
 func validCreateShareBody() string {
 	eph := base64.StdEncoding.EncodeToString(make([]byte, 91))
 	wfk := base64.StdEncoding.EncodeToString(make([]byte, 40))
@@ -62,98 +55,13 @@ func TestStorageUsage_ServiceError_Returns500(t *testing.T) {
 	}
 }
 
-// ─── POST /storage/presign ───────────────────────────────────────────────────
-
-func TestPresignPut_HappyPath(t *testing.T) {
-	blobs := &mockBlobService{
-		presignPutOut: &storageuc.PresignPutResult{
-			BlobID:      uuid.New(),
-			UploadURL:   "https://s3.example.com/upload",
-			ExpiresIn:   3600,
-			HTTPMethod:  "PUT",
-			ContentType: "text/plain",
-		},
-	}
-	w := doWithAuth(fullRouter(routerOpts{blobs: blobs}), http.MethodPost, "/storage/presign", validPresignBody())
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body)
-	}
-	var body map[string]any
-	decodeBody(t, w, &body)
-	if body["upload_url"] == "" {
-		t.Error("upload_url must be present")
-	}
-}
-
-func TestPresignPut_InvalidJSON_Returns400(t *testing.T) {
-	w := doWithAuth(fullRouter(routerOpts{}), http.MethodPost, "/storage/presign", `{bad}`)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", w.Code)
-	}
-}
-
-func TestPresignPut_InvalidBase64FileKey_Returns400(t *testing.T) {
-	iv := base64.StdEncoding.EncodeToString(make([]byte, 12))
-	body := `{"file_name":"f.txt","content_type":"text/plain","file_size":1,` +
-		`"encrypted_file_key":"not!base64!!","file_iv":"` + iv + `"}`
-	w := doWithAuth(fullRouter(routerOpts{}), http.MethodPost, "/storage/presign", body)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", w.Code)
-	}
-}
-
-func TestPresignPut_InvalidBase64IV_Returns400(t *testing.T) {
-	efk := base64.StdEncoding.EncodeToString(make([]byte, 32))
-	body := `{"file_name":"f.txt","content_type":"text/plain","file_size":1,` +
-		`"encrypted_file_key":"` + efk + `","file_iv":"not!base64!!"}`
-	w := doWithAuth(fullRouter(routerOpts{}), http.MethodPost, "/storage/presign", body)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", w.Code)
-	}
-}
-
-func TestPresignPut_InvalidFolderID_Returns400(t *testing.T) {
-	efk := base64.StdEncoding.EncodeToString(make([]byte, 32))
-	iv := base64.StdEncoding.EncodeToString(make([]byte, 12))
-	body := `{"file_name":"f.txt","content_type":"text/plain","file_size":1,` +
-		`"encrypted_file_key":"` + efk + `","file_iv":"` + iv + `","folder_id":"not-a-uuid"}`
-	w := doWithAuth(fullRouter(routerOpts{}), http.MethodPost, "/storage/presign", body)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", w.Code)
-	}
-}
-
-func TestPresignPut_QuotaExceeded_Returns402(t *testing.T) {
-	blobs := &mockBlobService{presignPutErr: storageuc.ErrQuotaExceeded}
-	w := doWithAuth(fullRouter(routerOpts{blobs: blobs}), http.MethodPost, "/storage/presign", validPresignBody())
-	if w.Code != http.StatusPaymentRequired {
-		t.Fatalf("want 402, got %d", w.Code)
-	}
-}
-
-func TestPresignPut_FileTooLarge_Returns413(t *testing.T) {
-	blobs := &mockBlobService{presignPutErr: storageuc.ErrFileTooLarge}
-	w := doWithAuth(fullRouter(routerOpts{blobs: blobs}), http.MethodPost, "/storage/presign", validPresignBody())
-	if w.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("want 413, got %d", w.Code)
-	}
-}
-
-func TestPresignPut_FolderNotFound_Returns404(t *testing.T) {
-	blobs := &mockBlobService{presignPutErr: storageuc.ErrFolderNotFound}
-	w := doWithAuth(fullRouter(routerOpts{blobs: blobs}), http.MethodPost, "/storage/presign", validPresignBody())
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("want 404, got %d", w.Code)
-	}
-}
-
 // ─── GET /storage/blobs ──────────────────────────────────────────────────────
 
 func TestListBlobs_HappyPath_NoFilter(t *testing.T) {
 	blob := entity.Blob{
 		ID: uuid.New(), FileName: "a.txt", ContentType: "text/plain",
-		EncryptedFileKey: make([]byte, 32), FileIV: make([]byte, 12),
-		CreatedAt: time.Now(),
+		EncryptedFileKey: make([]byte, 32),
+		CreatedAt:        time.Now(),
 	}
 	blobs := &mockBlobService{blobs: []entity.Blob{blob}}
 	w := doWithAuth(fullRouter(routerOpts{blobs: blobs}), http.MethodGet, "/storage/blobs", "")
@@ -192,33 +100,6 @@ func TestListBlobs_InvalidFolderID_Returns400(t *testing.T) {
 	}
 }
 
-// ─── POST /storage/blobs/{blobID}/confirm-upload ─────────────────────────────
-
-func TestConfirmUpload_HappyPath(t *testing.T) {
-	blobs := &mockBlobService{confirmFile: "test.txt"}
-	url := "/storage/blobs/" + uuid.New().String() + "/confirm-upload"
-	w := doWithAuth(fullRouter(routerOpts{blobs: blobs}), http.MethodPost, url, "")
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("want 204, got %d: %s", w.Code, w.Body)
-	}
-}
-
-func TestConfirmUpload_InvalidUUID_Returns400(t *testing.T) {
-	w := doWithAuth(fullRouter(routerOpts{}), http.MethodPost, "/storage/blobs/not-a-uuid/confirm-upload", "")
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", w.Code)
-	}
-}
-
-func TestConfirmUpload_NotFound_Returns404(t *testing.T) {
-	blobs := &mockBlobService{confirmErr: storageuc.ErrNotFound}
-	url := "/storage/blobs/" + uuid.New().String() + "/confirm-upload"
-	w := doWithAuth(fullRouter(routerOpts{blobs: blobs}), http.MethodPost, url, "")
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("want 404, got %d", w.Code)
-	}
-}
-
 // ─── POST /storage/blobs/{blobID}/presign-get ────────────────────────────────
 
 func TestPresignGet_HappyPath(t *testing.T) {
@@ -230,7 +111,6 @@ func TestPresignGet_HappyPath(t *testing.T) {
 			HTTPMethod:       "GET",
 			ContentType:      "text/plain",
 			EncryptedFileKey: make([]byte, 32),
-			FileIV:           make([]byte, 12),
 			FileName:         "test.txt",
 		},
 	}

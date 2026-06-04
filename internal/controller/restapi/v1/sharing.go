@@ -116,7 +116,7 @@ func createShare(d Deps) http.HandlerFunc {
 			return
 		}
 		d.Audit.LogAsync(r.Context(), auditEvent(ownerID, entity.AuditFileShared, realIP(r), r.Header.Get("User-Agent"), &blobID, in.RecipientEmail))
-		restapi.WriteJSON(w, http.StatusCreated, shareToDTO(share, "", ""))
+		restapi.WriteJSON(w, http.StatusCreated, shareToDTO(share, "", 0, 0, 0))
 	}
 }
 
@@ -133,7 +133,7 @@ func listSharedWithMe(d Deps) http.HandlerFunc {
 		}
 		items := make([]dto.ShareResponse, 0, len(shares))
 		for _, s := range shares {
-			items = append(items, shareToDTO(s, "", ""))
+			items = append(items, shareToDTO(s, "", 0, 0, 0))
 		}
 		restapi.WriteJSON(w, http.StatusOK, dto.ListSharesResponse{Items: items})
 	}
@@ -157,7 +157,7 @@ func listMyShares(d Deps) http.HandlerFunc {
 		}
 		items := make([]dto.ShareResponse, 0, len(shares))
 		for _, s := range shares {
-			items = append(items, shareToDTO(s, "", ""))
+			items = append(items, shareToDTO(s, "", 0, 0, 0))
 		}
 		restapi.WriteJSON(w, http.StatusOK, dto.ListSharesResponse{Items: items})
 	}
@@ -182,8 +182,7 @@ func getSharedFile(d Deps) http.HandlerFunc {
 		blobID := result.Share.BlobID
 		// Log under the owner's ID — they need to see who downloaded their shared file.
 		d.Audit.LogAsync(r.Context(), auditEvent(result.Share.OwnerID, entity.AuditFileDownloadedViaShare, realIP(r), r.Header.Get("User-Agent"), &blobID, result.Share.BlobFileName))
-		fileIVB64 := base64.StdEncoding.EncodeToString(result.FileIV)
-		restapi.WriteJSON(w, http.StatusOK, shareToDTO(result.Share, result.DownloadURL, fileIVB64))
+		restapi.WriteJSON(w, http.StatusOK, shareToDTO(result.Share, result.DownloadURL, result.FileSize, result.FileSizePlain, result.ChunkSize))
 	}
 }
 
@@ -207,7 +206,7 @@ func revokeShare(d Deps) http.HandlerFunc {
 	}
 }
 
-func shareToDTO(s entity.FileShareView, downloadURL, fileIVB64 string) dto.ShareResponse {
+func shareToDTO(s entity.FileShareView, downloadURL string, fileSize, fileSizePlain int64, chunkSize int32) dto.ShareResponse {
 	resp := dto.ShareResponse{
 		ShareID:         s.ID.String(),
 		BlobID:          s.BlobID.String(),
@@ -220,7 +219,9 @@ func shareToDTO(s entity.FileShareView, downloadURL, fileIVB64 string) dto.Share
 		WrappedFileKey:  base64.StdEncoding.EncodeToString(s.WrappedFileKey),
 		CreatedAt:       s.CreatedAt,
 		DownloadURL:     downloadURL,
-		FileIV:          fileIVB64,
+		FileSize:        fileSize,
+		FileSizePlain:   fileSizePlain,
+		ChunkSize:       chunkSize,
 	}
 	if s.ExpiresAt != nil {
 		ts := s.ExpiresAt.Format(time.RFC3339)

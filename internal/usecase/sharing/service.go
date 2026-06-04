@@ -142,11 +142,13 @@ func (s *Service) GetSharedFile(ctx context.Context, shareID, callerID uuid.UUID
 	}
 
 	return SharedFileResult{
-		Share:       share,
-		DownloadURL: u.String(),
-		FileIV:      info.FileIV,
-		FileName:    info.FileName,
-		ContentType: info.ContentType,
+		Share:         share,
+		DownloadURL:   u.String(),
+		FileName:      info.FileName,
+		ContentType:   info.ContentType,
+		FileSize:      info.FileSize,
+		FileSizePlain: info.FileSizePlain,
+		ChunkSize:     info.ChunkSize,
 	}, nil
 }
 

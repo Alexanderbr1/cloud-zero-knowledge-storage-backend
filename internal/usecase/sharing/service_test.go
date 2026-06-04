@@ -298,7 +298,7 @@ func TestGetSharedFile_HappyPath(t *testing.T) {
 		ObjectKey:   "u/blob",
 		FileName:    "photo.jpg",
 		ContentType: "image/jpeg",
-		FileIV:      []byte("iv"),
+		ChunkSize:   4194304, FileSizePlain: 100,
 	}
 	f.blobs.infoFound = true
 

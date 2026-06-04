@@ -165,9 +165,10 @@ func blobToTrashDTO(b entity.Blob) dto.TrashBlobItem {
 		FileName:         b.FileName,
 		ContentType:      b.ContentType,
 		FileSize:         b.FileSize,
+		FileSizePlain:    b.FileSizePlain,
+		ChunkSize:        b.ChunkSize,
 		CreatedAt:        b.CreatedAt,
 		EncryptedFileKey: base64.StdEncoding.EncodeToString(b.EncryptedFileKey),
-		FileIV:           base64.StdEncoding.EncodeToString(b.FileIV),
 	}
 	if b.FolderID != nil {
 		s := b.FolderID.String()

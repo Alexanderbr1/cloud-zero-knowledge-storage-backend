@@ -29,17 +29,56 @@ type RegisterBlobParams struct {
 	ContentType      string
 	ObjectKey        string
 	FileSize         int64
+	FileSizePlain    int64
+	ChunkSize        int32
 	EncryptedFileKey []byte
-	FileIV           []byte
 	FolderID         *uuid.UUID
+	UploadID         string // non-empty for multipart uploads
+}
+
+// ─── Multipart ────────────────────────────────────────────────────────────────
+
+type InitiateMultipartParams struct {
+	UserID           uuid.UUID
+	FileName         string
+	ContentType      string
+	FileSize         int64
+	FileSizePlain    int64
+	ChunkSize        int32
+	PartCount        int
+	EncryptedFileKey []byte
+	FolderID         *uuid.UUID
+}
+
+type PartURL struct {
+	PartNumber int
+	URL        string
+}
+
+type InitiateMultipartResult struct {
+	BlobID   uuid.UUID
+	UploadID string
+	PartURLs []PartURL
+}
+
+type CompleteMultipartParams struct {
+	BlobID uuid.UUID
+	UserID uuid.UUID
+}
+
+type OrphanedBlob struct {
+	ObjectKey string
+	UploadID  string // empty for single-PUT blobs
 }
 
 type BlobMeta struct {
 	ObjectKey        string
 	ContentType      string
 	EncryptedFileKey []byte
-	FileIV           []byte
 	FileName         string
+	FileSize         int64
+	FileSizePlain    int64
+	ChunkSize        int32
 }
 
 type PendingBlobMeta struct {
@@ -47,6 +86,7 @@ type PendingBlobMeta struct {
 	DeclaredSize int64
 	FileName     string
 	FolderID     *uuid.UUID
+	UploadID     string
 }
 
 type SearchBlobRecord struct {
@@ -78,25 +118,6 @@ type MoveFolderParams struct {
 	NewParentID *uuid.UUID
 }
 
-type PresignPutParams struct {
-	UserID           uuid.UUID
-	FileName         string
-	ContentType      string
-	FileSize         int64
-	EncryptedFileKey []byte
-	FileIV           []byte
-	FolderID         *uuid.UUID
-}
-
-type PresignPutResult struct {
-	BlobID      uuid.UUID
-	ObjectKey   string
-	UploadURL   string
-	ExpiresIn   int64
-	HTTPMethod  string
-	ContentType string
-}
-
 type PresignGetResult struct {
 	BlobID           uuid.UUID
 	ObjectKey        string
@@ -105,8 +126,10 @@ type PresignGetResult struct {
 	HTTPMethod       string
 	ContentType      string
 	EncryptedFileKey []byte
-	FileIV           []byte
 	FileName         string
+	FileSize         int64
+	FileSizePlain    int64
+	ChunkSize        int32
 }
 
 type SearchParams struct {
