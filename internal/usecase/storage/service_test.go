@@ -134,6 +134,9 @@ func (m *mockBlobRepo) SearchBlobs(_ context.Context, _ uuid.UUID, _ string) ([]
 func (m *mockBlobRepo) TrashBlob(_ context.Context, _, _ uuid.UUID) (string, bool, error) {
 	return m.trashName, m.trashOk, m.trashErr
 }
+func (m *mockBlobRepo) AbortPendingBlob(_ context.Context, _, _ uuid.UUID) (string, string, bool, error) {
+	return "", "", false, nil
+}
 
 // ─── mockBlobTrashRepo ────────────────────────────────────────────────────────
 
