@@ -63,6 +63,9 @@ func (m *mockBlobService) InitiateMultipartUpload(_ context.Context, _ storageuc
 func (m *mockBlobService) CompleteMultipartUpload(_ context.Context, _ storageuc.CompleteMultipartParams) error {
 	return nil
 }
+func (m *mockBlobService) AbortUpload(_ context.Context, _, _ uuid.UUID) error {
+	return nil
+}
 
 // ─── mockFolderService ───────────────────────────────────────────────────────
 
