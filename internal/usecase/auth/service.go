@@ -35,6 +35,10 @@ type PasswordResetRepository interface {
 type SessionRepository interface {
 	CreateRefreshSession(ctx context.Context, p RefreshSessionParams) error
 	ConsumeRefreshSession(ctx context.Context, tokenHash []byte) (ConsumedSession, bool, error)
+	// FindRevokedSession looks up a refresh session that has already been consumed.
+	// Used for reuse detection: if a token that was previously rotated is presented again,
+	// an attacker may have gotten a new token before the legitimate user — revoke the device session.
+	FindRevokedSession(ctx context.Context, tokenHash []byte) (ConsumedSession, bool, error)
 }
 
 type DeviceSessionRepository interface {
@@ -42,14 +46,11 @@ type DeviceSessionRepository interface {
 	UpdateLastActive(ctx context.Context, id uuid.UUID) error
 	ListActiveSessions(ctx context.Context, userID uuid.UUID) ([]entity.DeviceSession, error)
 	RevokeSession(ctx context.Context, id, userID uuid.UUID) error
-	// returns IDs so the caller can add them to the blocklist.
 	RevokeOtherSessions(ctx context.Context, userID, exceptID uuid.UUID) ([]uuid.UUID, error)
 	RevokeOrphanedSessions(ctx context.Context) error
 	RevokeUserOrphanedSessions(ctx context.Context, userID uuid.UUID) error
 }
 
-// SessionBlocklist records revoked session IDs for the remaining lifetime of
-// their access tokens so the auth middleware can reject them immediately.
 type SessionBlocklist interface {
 	Block(ctx context.Context, id uuid.UUID, ttl time.Duration) error
 	BlockBatch(ctx context.Context, ids []uuid.UUID, ttl time.Duration) error
@@ -59,8 +60,6 @@ type TokenIssuer interface {
 	IssueAccess(userID, deviceSessionID uuid.UUID) (token string, expiresInSec int64, err error)
 }
 
-// Implementations must be safe for concurrent use and return quickly;
-// the caller fires notifications in a goroutine.
 type Notifier interface {
 	NotifyNewLogin(ctx context.Context, toEmail, deviceName, ipAddress string) error
 	NotifyPasswordReset(ctx context.Context, toEmail, resetURL string) error
@@ -114,6 +113,7 @@ func (s *Service) Register(ctx context.Context, p RegisterParams) (TokenPair, er
 	}); err != nil {
 		return TokenPair{}, err
 	}
+
 	return s.issueTokenPair(ctx, id, p.Device)
 }
 
@@ -225,6 +225,9 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 		return TokenPair{}, err
 	}
 	if !ok {
+		// Token not found or already consumed. If it was previously consumed (rotated),
+		// this is a reuse — someone else may have the newer token. Revoke the device session.
+		s.handleTokenReuse(ctx, hash)
 		return TokenPair{}, ErrInvalidRefresh
 	}
 
@@ -235,7 +238,43 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 	return s.issueTokenPairForDevice(ctx, consumed.UserID, consumed.DeviceSessionID, consumed.ClientKey)
 }
 
-func (s *Service) Logout(ctx context.Context, refreshToken string) error {
+// handleTokenReuse detects refresh token reuse: if the presented token was already rotated
+// (revoked_at IS NOT NULL), the token family is compromised. The device session and any
+// access tokens it issued are invalidated immediately.
+func (s *Service) handleTokenReuse(ctx context.Context, tokenHash []byte) {
+	tctx, cancel := dbCtx(ctx)
+	defer cancel()
+
+	session, found, err := s.Sessions.FindRevokedSession(tctx, tokenHash)
+	if err != nil {
+		s.Logger.Warn().Err(err).Msg("reuse detection: db lookup failed")
+		return
+	}
+	if !found {
+		return // token never existed or expired — not a reuse, just invalid
+	}
+
+	s.Logger.Warn().
+		Str("user_id", session.UserID.String()).
+		Str("device_session_id", session.DeviceSessionID.String()).
+		Msg("refresh token reuse detected — revoking device session")
+
+	if err := s.DeviceSessions.RevokeSession(ctx, session.DeviceSessionID, session.UserID); err != nil {
+		s.Logger.Warn().Err(err).Msg("reuse detection: revoke device session failed")
+		return
+	}
+	if err := s.Blocklist.Block(ctx, session.DeviceSessionID, s.AccessTTL); err != nil {
+		s.Logger.Warn().Err(err).Msg("reuse detection: blocklist failed")
+	}
+	if s.Audit != nil {
+		s.Audit.LogAsync(ctx, entity.AuditEvent{
+			UserID:    session.UserID,
+			EventType: entity.AuditRefreshTokenReuseDetected,
+		})
+	}
+}
+
+func (s *Service) Logout(ctx context.Context, refreshToken string, device DeviceInfo) error {
 	refreshToken = strings.TrimSpace(refreshToken)
 	hash := refreshTokenHash(refreshToken)
 
@@ -258,6 +297,8 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 		s.Audit.LogAsync(ctx, entity.AuditEvent{
 			UserID:    consumed.UserID,
 			EventType: entity.AuditLogout,
+			IPAddress: device.IPAddress,
+			UserAgent: device.UserAgent,
 		})
 	}
 	return nil

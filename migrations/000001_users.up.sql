@@ -1,3 +1,5 @@
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 CREATE TABLE users (
     id                    UUID        PRIMARY KEY,
     email                 TEXT        NOT NULL UNIQUE,

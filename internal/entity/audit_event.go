@@ -18,12 +18,13 @@ type AuditEvent struct {
 }
 
 const (
-	AuditLoginSuccess    = "login_success"
-	AuditLoginFailed     = "login_failed"
-	AuditLogout          = "logout"
-	AuditSessionRevoked  = "session_revoked"
-	AuditSessionsRevoked = "sessions_revoked_other"
-	AuditPasswordReset   = "password_reset"
+	AuditLoginSuccess              = "login_success"
+	AuditLoginFailed               = "login_failed"
+	AuditLogout                    = "logout"
+	AuditSessionRevoked            = "session_revoked"
+	AuditSessionsRevoked           = "sessions_revoked_other"
+	AuditPasswordReset             = "password_reset"
+	AuditRefreshTokenReuseDetected = "refresh_token_reuse_detected"
 
 	AuditFileUploaded           = "file_uploaded"
 	AuditFileDownloaded         = "file_downloaded"

@@ -104,7 +104,7 @@ func (m *mockBlobRepo) RegisterBlob(_ context.Context, _ storage.RegisterBlobPar
 func (m *mockBlobRepo) GetPendingBlobMeta(_ context.Context, _, _ uuid.UUID) (storage.PendingBlobMeta, bool, error) {
 	return m.pending, m.pendingFound, m.pendingErr
 }
-func (m *mockBlobRepo) ConfirmBlobUploadWithSize(_ context.Context, _, _ uuid.UUID, _ int64) (bool, error) {
+func (m *mockBlobRepo) ConfirmBlobUpload(_ context.Context, _, _ uuid.UUID, _ int64) (bool, error) {
 	return m.confirmOk, m.confirmErr
 }
 func (m *mockBlobRepo) PurgeOrphanedBlobs(_ context.Context, _ time.Time) ([]storage.OrphanedBlob, error) {

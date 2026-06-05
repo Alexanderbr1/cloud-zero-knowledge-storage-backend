@@ -9,13 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-var _ interface {
-	CreateResetToken(ctx context.Context, userID uuid.UUID, tokenHash []byte, expiresAt time.Time) error
-	ConsumeResetToken(ctx context.Context, tokenHash []byte) (uuid.UUID, bool, error)
-	GetUserIDFromResetToken(ctx context.Context, tokenHash []byte) (uuid.UUID, bool, error)
-	InvalidateUserTokens(ctx context.Context, userID uuid.UUID) error
-} = (*Storage)(nil)
-
 func (s *Storage) CreateResetToken(ctx context.Context, userID uuid.UUID, tokenHash []byte, expiresAt time.Time) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)

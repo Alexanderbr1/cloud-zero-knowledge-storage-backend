@@ -21,7 +21,7 @@ type AuthService interface {
 	LoginInit(ctx context.Context, email, aHex string) (authuc.LoginInitResult, error)
 	LoginFinalize(ctx context.Context, p authuc.LoginFinalizeParams) (authuc.LoginFinalizeResult, error)
 	Refresh(ctx context.Context, refreshToken string) (authuc.TokenPair, error)
-	Logout(ctx context.Context, refreshToken string) error
+	Logout(ctx context.Context, refreshToken string, device authuc.DeviceInfo) error
 	GetCryptoSalt(ctx context.Context, userID uuid.UUID) (cryptoSaltB64 string, kekEncMaster []byte, err error)
 	RequestPasswordReset(ctx context.Context, email string) error
 	GetRecoveryData(ctx context.Context, token string) (authuc.RecoveryData, bool, error)
@@ -161,7 +161,7 @@ func refresh(d Deps) http.HandlerFunc {
 func logout(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rt := readRefreshToken(r, d.RefreshCookie.Name)
-		if err := d.Auth.Logout(r.Context(), rt); err != nil {
+		if err := d.Auth.Logout(r.Context(), rt, parseDeviceInfo(r)); err != nil {
 			d.Logger.Warn().Err(err).Msg("logout failed")
 		}
 		clearRefreshTokenCookie(w, d.RefreshCookie)

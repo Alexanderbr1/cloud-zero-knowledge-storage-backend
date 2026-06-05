@@ -10,7 +10,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"cloud-backend/internal/entity"
-	"cloud-backend/internal/repo/memory"
 	authuc "cloud-backend/internal/usecase/auth"
 	"cloud-backend/pkg/jwt"
 )
@@ -48,10 +47,13 @@ func (m *mockUserRepo) UpdateCredentialsAndKEK(_ context.Context, _ uuid.UUID, _
 }
 
 type mockSessionRepo struct {
-	createErr  error
-	consumed   authuc.ConsumedSession
-	found      bool
-	consumeErr error
+	createErr      error
+	consumed       authuc.ConsumedSession
+	found          bool
+	consumeErr     error
+	revokedSession authuc.ConsumedSession
+	reuseFound     bool
+	reuseErr       error
 }
 
 func (m *mockSessionRepo) CreateRefreshSession(_ context.Context, _ authuc.RefreshSessionParams) error {
@@ -59,6 +61,9 @@ func (m *mockSessionRepo) CreateRefreshSession(_ context.Context, _ authuc.Refre
 }
 func (m *mockSessionRepo) ConsumeRefreshSession(_ context.Context, _ []byte) (authuc.ConsumedSession, bool, error) {
 	return m.consumed, m.found, m.consumeErr
+}
+func (m *mockSessionRepo) FindRevokedSession(_ context.Context, _ []byte) (authuc.ConsumedSession, bool, error) {
+	return m.revokedSession, m.reuseFound, m.reuseErr
 }
 
 type mockDeviceRepo struct {
@@ -105,6 +110,27 @@ type mockAudit struct{}
 
 func (m *mockAudit) LogAsync(_ context.Context, _ entity.AuditEvent) {}
 
+type mockSRPSessions struct {
+	data map[string]*authuc.SRPSessEntry
+}
+
+func newMockSRPSessions() *mockSRPSessions {
+	return &mockSRPSessions{data: make(map[string]*authuc.SRPSessEntry)}
+}
+func (m *mockSRPSessions) Store(id uuid.UUID, e *authuc.SRPSessEntry) bool {
+	m.data[id.String()] = e
+	return true
+}
+func (m *mockSRPSessions) Consume(id uuid.UUID) (*authuc.SRPSessEntry, bool) {
+	key := id.String()
+	e, ok := m.data[key]
+	if !ok {
+		return nil, false
+	}
+	delete(m.data, key)
+	return e, true
+}
+
 type mockResetTokens struct {
 	createErr     error
 	userID        uuid.UUID
@@ -141,9 +167,6 @@ type serviceFixture struct {
 
 func newFixture(t *testing.T) *serviceFixture {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
 	f := &serviceFixture{
 		users:       &mockUserRepo{},
 		sessions:    &mockSessionRepo{},
@@ -160,7 +183,7 @@ func newFixture(t *testing.T) *serviceFixture {
 		Blocklist:      f.blocklist,
 		AccessTTL:      15 * time.Minute,
 		RefreshTTL:     720 * time.Hour,
-		SRPSessions:    memory.NewSRPSessionStore(ctx),
+		SRPSessions:    newMockSRPSessions(),
 		Notifier:       f.notifier,
 		Audit:          &mockAudit{},
 		ResetTokens:    f.resetTokens,
@@ -466,7 +489,7 @@ func TestLogout_HappyPath(t *testing.T) {
 		UserID:          uuid.New(),
 		DeviceSessionID: uuid.New(),
 	}
-	if err := f.svc.Logout(context.Background(), "any-token"); err != nil {
+	if err := f.svc.Logout(context.Background(), "any-token", authuc.DeviceInfo{}); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
 }
@@ -475,7 +498,7 @@ func TestLogout_AlreadyRevoked_NoError(t *testing.T) {
 	f := newFixture(t)
 	f.sessions.found = false // token not found — treat as already logged out
 
-	if err := f.svc.Logout(context.Background(), "stale-token"); err != nil {
+	if err := f.svc.Logout(context.Background(), "stale-token", authuc.DeviceInfo{}); err != nil {
 		t.Fatalf("want nil for already-revoked token, got %v", err)
 	}
 }
@@ -518,6 +541,88 @@ func TestRevokeDeviceSession_BlocklistCalled(t *testing.T) {
 	}
 	if !blocked {
 		t.Error("revoked session should be added to blocklist")
+	}
+}
+
+// ─── Refresh (reuse detection) ────────────────────────────────────────────────
+
+// capturingDeviceRepo wraps mockDeviceRepo and intercepts RevokeSession calls.
+type capturingDeviceRepo struct {
+	*mockDeviceRepo
+	onRevoke func(id uuid.UUID)
+}
+
+func (c *capturingDeviceRepo) RevokeSession(ctx context.Context, id, userID uuid.UUID) error {
+	if c.onRevoke != nil {
+		c.onRevoke(id)
+	}
+	return c.mockDeviceRepo.RevokeSession(ctx, id, userID)
+}
+
+func TestRefresh_ReuseDetected_RevokesAndBlocklistsDeviceSession(t *testing.T) {
+	f := newFixture(t)
+
+	deviceSessionID := uuid.New()
+	userID := uuid.New()
+
+	// Simulate: token was already consumed (rotated) — attacker used it first.
+	f.sessions.found = false
+	f.sessions.reuseFound = true
+	f.sessions.revokedSession = authuc.ConsumedSession{
+		UserID:          userID,
+		DeviceSessionID: deviceSessionID,
+	}
+
+	revoked := false
+	blocklisted := false
+
+	f.svc.DeviceSessions = &capturingDeviceRepo{
+		mockDeviceRepo: f.devices,
+		onRevoke: func(id uuid.UUID) {
+			if id == deviceSessionID {
+				revoked = true
+			}
+		},
+	}
+	f.svc.Blocklist = &capturingBlocklist{
+		onBlock: func(id uuid.UUID) {
+			if id == deviceSessionID {
+				blocklisted = true
+			}
+		},
+	}
+
+	_, err := f.svc.Refresh(context.Background(), "stolen-and-already-rotated-token")
+	if !errors.Is(err, authuc.ErrInvalidRefresh) {
+		t.Fatalf("want ErrInvalidRefresh, got %v", err)
+	}
+	if !revoked {
+		t.Error("device session must be revoked when token reuse is detected")
+	}
+	if !blocklisted {
+		t.Error("device session must be blocklisted when token reuse is detected")
+	}
+}
+
+func TestRefresh_UnknownToken_NoReuseRevocation(t *testing.T) {
+	f := newFixture(t)
+
+	// Token not found anywhere — just an invalid token, no reuse.
+	f.sessions.found = false
+	f.sessions.reuseFound = false
+
+	revoked := false
+	f.svc.DeviceSessions = &capturingDeviceRepo{
+		mockDeviceRepo: f.devices,
+		onRevoke:       func(_ uuid.UUID) { revoked = true },
+	}
+
+	_, err := f.svc.Refresh(context.Background(), "completely-unknown-token")
+	if !errors.Is(err, authuc.ErrInvalidRefresh) {
+		t.Fatalf("want ErrInvalidRefresh, got %v", err)
+	}
+	if revoked {
+		t.Error("should not revoke any session for an unknown (non-reused) token")
 	}
 }
 

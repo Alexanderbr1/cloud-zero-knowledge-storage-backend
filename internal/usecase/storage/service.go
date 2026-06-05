@@ -29,7 +29,7 @@ type BlobRepo interface {
 	GetUserStorageUsed(ctx context.Context, userID uuid.UUID) (int64, error)
 	RegisterBlob(ctx context.Context, p RegisterBlobParams) error
 	GetPendingBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (PendingBlobMeta, bool, error)
-	ConfirmBlobUploadWithSize(ctx context.Context, blobID, userID uuid.UUID, actualSize int64) (bool, error)
+	ConfirmBlobUpload(ctx context.Context, blobID, userID uuid.UUID, actualSize int64) (bool, error)
 	PurgeOrphanedBlobs(ctx context.Context, before time.Time) ([]OrphanedBlob, error)
 	GetBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (BlobMeta, bool, error)
 	RemoveBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey string, ok bool, err error)
@@ -677,7 +677,7 @@ func (s *Service) CompleteMultipartUpload(ctx context.Context, p CompleteMultipa
 		return fmt.Errorf("stat object: %w", err)
 	}
 
-	confirmed, err := s.Blobs.ConfirmBlobUploadWithSize(dbCtx, p.BlobID, p.UserID, actualSize)
+	confirmed, err := s.Blobs.ConfirmBlobUpload(dbCtx, p.BlobID, p.UserID, actualSize)
 	if err != nil {
 		return fmt.Errorf("confirm upload: %w", err)
 	}

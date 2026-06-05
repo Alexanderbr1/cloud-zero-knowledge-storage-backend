@@ -33,3 +33,7 @@ CREATE INDEX idx_folders_trash
 CREATE INDEX idx_folders_purge
     ON folders (deleted_at)
     WHERE deleted_at IS NOT NULL;
+
+CREATE INDEX idx_folders_name_trgm
+    ON folders USING GIN (name gin_trgm_ops)
+    WHERE deleted_at IS NULL;

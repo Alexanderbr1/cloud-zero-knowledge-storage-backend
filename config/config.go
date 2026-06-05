@@ -114,10 +114,19 @@ func (l *loader) buildJWT() JWTConfig {
 	if secret != "" && len(secret) < 32 {
 		l.errs = append(l.errs, "JWT_SECRET: must be at least 32 characters (HS256 requires 256-bit key)")
 	}
+	refreshTTL := l.requirePosDuration("JWT_REFRESH_TTL", 24*time.Hour)
+	const maxRefreshTTL = 7 * 24 * time.Hour
+	if refreshTTL > maxRefreshTTL {
+		l.errs = append(l.errs, fmt.Sprintf(
+			"JWT_REFRESH_TTL: %s exceeds the maximum allowed value of 7d (168h); "+
+				"long-lived refresh tokens widen the theft window — use token rotation instead",
+			refreshTTL,
+		))
+	}
 	return JWTConfig{
 		Secret:     secret,
 		AccessTTL:  l.requirePosDuration("JWT_ACCESS_TTL", 15*time.Minute),
-		RefreshTTL: l.requirePosDuration("JWT_REFRESH_TTL", 30*24*time.Hour),
+		RefreshTTL: refreshTTL,
 	}
 }
 

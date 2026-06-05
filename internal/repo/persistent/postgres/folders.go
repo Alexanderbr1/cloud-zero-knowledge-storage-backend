@@ -26,9 +26,6 @@ const listFoldersChildSQL = `
 	WHERE user_id = $1 AND parent_id = $2 AND deleted_at IS NULL
 	ORDER BY name`
 
-var _ storageuc.FolderRepo = (*Storage)(nil)
-var _ storageuc.FolderTrashRepo = (*Storage)(nil)
-
 func (s *Storage) CreateFolder(ctx context.Context, p storageuc.CreateFolderParams) (entity.Folder, error) {
 	var f entity.Folder
 	err := s.pool.QueryRow(ctx,

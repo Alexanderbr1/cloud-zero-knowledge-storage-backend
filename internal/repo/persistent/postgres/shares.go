@@ -13,10 +13,6 @@ import (
 	sharinguc "cloud-backend/internal/usecase/sharing"
 )
 
-var _ sharinguc.ShareRepository = (*Storage)(nil)
-var _ sharinguc.UserKeyStore = (*Storage)(nil)
-var _ sharinguc.BlobStore = (*Storage)(nil)
-
 // ─── UserKeyStore ─────────────────────────────────────────────────────────
 
 func (s *Storage) GetPublicKeyByEmail(ctx context.Context, email string) ([]byte, uuid.UUID, error) {

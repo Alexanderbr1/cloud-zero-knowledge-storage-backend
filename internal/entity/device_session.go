@@ -6,15 +6,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// Переживает ротацию refresh-токенов: last_active_at обновляется при каждом refresh,
-// но запись остаётся той же.
 type DeviceSession struct {
 	ID           uuid.UUID
 	UserID       uuid.UUID
-	DeviceName   string // "Chrome on macOS"
-	IPAddress    string // IP при первом логине
-	UserAgent    string // raw User-Agent
+	DeviceName   string
+	IPAddress    string
+	UserAgent    string
 	CreatedAt    time.Time
 	LastActiveAt time.Time
-	RevokedAt    *time.Time // nil — сессия активна
+	RevokedAt    *time.Time
 }

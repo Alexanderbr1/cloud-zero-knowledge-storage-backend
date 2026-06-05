@@ -7,10 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"cloud-backend/internal/entity"
-	audituc "cloud-backend/internal/usecase/audit"
 )
-
-var _ audituc.AuditRepo = (*Storage)(nil)
 
 func (s *Storage) InsertAuditEvent(ctx context.Context, e entity.AuditEvent) error {
 	_, err := s.pool.Exec(ctx,

@@ -13,8 +13,6 @@ import (
 	authuc "cloud-backend/internal/usecase/auth"
 )
 
-var _ authuc.UserRepository = (*Storage)(nil)
-
 func (s *Storage) CreateUser(ctx context.Context, p authuc.NewUserParams) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO users

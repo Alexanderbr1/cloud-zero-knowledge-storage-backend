@@ -12,9 +12,6 @@ import (
 	storageuc "cloud-backend/internal/usecase/storage"
 )
 
-var _ storageuc.BlobRepo = (*Storage)(nil)
-var _ storageuc.BlobTrashRepo = (*Storage)(nil)
-
 func (s *Storage) GetUserStorageUsed(ctx context.Context, userID uuid.UUID) (int64, error) {
 	var total int64
 	err := s.pool.QueryRow(ctx,
@@ -28,7 +25,7 @@ func (s *Storage) RegisterBlob(ctx context.Context, p storageuc.RegisterBlobPara
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO stored_blobs
 		 (id, user_id, file_name, content_type, object_key, file_size, file_size_plain, chunk_size, encrypted_file_key, folder_id, upload_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''))`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		p.ID, p.UserID, p.FileName, p.ContentType, p.ObjectKey, p.FileSize,
 		p.FileSizePlain, p.ChunkSize, p.EncryptedFileKey, p.FolderID, p.UploadID,
 	)
@@ -39,7 +36,8 @@ func (s *Storage) GetBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (st
 	var m storageuc.BlobMeta
 	err := s.pool.QueryRow(ctx,
 		`SELECT object_key, content_type, encrypted_file_key, file_name, file_size, file_size_plain, chunk_size
-		 FROM stored_blobs WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL AND uploaded_at IS NOT NULL`,
+		 FROM stored_blobs
+		 WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL AND uploaded_at IS NOT NULL`,
 		blobID, userID,
 	).Scan(&m.ObjectKey, &m.ContentType, &m.EncryptedFileKey, &m.FileName, &m.FileSize, &m.FileSizePlain, &m.ChunkSize)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -83,27 +81,13 @@ func (s *Storage) ListBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blo
 }
 
 func (s *Storage) ListBlobsInFolder(ctx context.Context, userID uuid.UUID, folderID *uuid.UUID) ([]entity.Blob, error) {
-	var (
-		rows pgx.Rows
-		err  error
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, chunk_size, file_size_plain
+		 FROM stored_blobs
+		 WHERE user_id = $1 AND folder_id IS NOT DISTINCT FROM $2 AND deleted_at IS NULL AND uploaded_at IS NOT NULL
+		 ORDER BY created_at DESC`,
+		userID, folderID,
 	)
-	if folderID == nil {
-		rows, err = s.pool.Query(ctx,
-			`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, chunk_size, file_size_plain
-			 FROM stored_blobs
-			 WHERE user_id = $1 AND folder_id IS NULL AND deleted_at IS NULL AND uploaded_at IS NOT NULL
-			 ORDER BY created_at DESC`,
-			userID,
-		)
-	} else {
-		rows, err = s.pool.Query(ctx,
-			`SELECT id, folder_id, file_name, content_type, object_key, file_size, created_at, encrypted_file_key, chunk_size, file_size_plain
-			 FROM stored_blobs
-			 WHERE user_id = $1 AND folder_id = $2 AND deleted_at IS NULL AND uploaded_at IS NOT NULL
-			 ORDER BY created_at DESC`,
-			userID, folderID,
-		)
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -200,15 +184,11 @@ func scanSearchBlobs(rows pgx.Rows, userID uuid.UUID) ([]storageuc.SearchBlobRec
 
 func (s *Storage) GetPendingBlobMeta(ctx context.Context, blobID, userID uuid.UUID) (storageuc.PendingBlobMeta, bool, error) {
 	var m storageuc.PendingBlobMeta
-	var uploadID *string
 	err := s.pool.QueryRow(ctx,
 		`SELECT object_key, file_size, file_name, folder_id, upload_id FROM stored_blobs
 		 WHERE id = $1 AND user_id = $2 AND uploaded_at IS NULL AND deleted_at IS NULL`,
 		blobID, userID,
-	).Scan(&m.ObjectKey, &m.DeclaredSize, &m.FileName, &m.FolderID, &uploadID)
-	if uploadID != nil {
-		m.UploadID = *uploadID
-	}
+	).Scan(&m.ObjectKey, &m.DeclaredSize, &m.FileName, &m.FolderID, &m.UploadID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return storageuc.PendingBlobMeta{}, false, nil
 	}
@@ -218,7 +198,7 @@ func (s *Storage) GetPendingBlobMeta(ctx context.Context, blobID, userID uuid.UU
 	return m, true, nil
 }
 
-func (s *Storage) ConfirmBlobUploadWithSize(ctx context.Context, blobID, userID uuid.UUID, actualSize int64) (bool, error) {
+func (s *Storage) ConfirmBlobUpload(ctx context.Context, blobID, userID uuid.UUID, actualSize int64) (bool, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE stored_blobs SET uploaded_at = NOW(), file_size = $3
 		 WHERE id = $1 AND user_id = $2 AND uploaded_at IS NULL AND deleted_at IS NULL`,
@@ -231,21 +211,17 @@ func (s *Storage) ConfirmBlobUploadWithSize(ctx context.Context, blobID, userID 
 }
 
 func (s *Storage) AbortPendingBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey, uploadID string, ok bool, err error) {
-	var uid *string
 	err = s.pool.QueryRow(ctx,
 		`DELETE FROM stored_blobs
 		 WHERE id = $1 AND user_id = $2 AND uploaded_at IS NULL AND deleted_at IS NULL
 		 RETURNING object_key, upload_id`,
 		blobID, userID,
-	).Scan(&objectKey, &uid)
+	).Scan(&objectKey, &uploadID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", "", false, nil
 	}
 	if err != nil {
 		return "", "", false, err
-	}
-	if uid != nil {
-		uploadID = *uid
 	}
 	return objectKey, uploadID, true, nil
 }
@@ -264,12 +240,8 @@ func (s *Storage) PurgeOrphanedBlobs(ctx context.Context, before time.Time) ([]s
 	var out []storageuc.OrphanedBlob
 	for rows.Next() {
 		var b storageuc.OrphanedBlob
-		var uploadID *string
-		if err := rows.Scan(&b.ObjectKey, &uploadID); err != nil {
+		if err := rows.Scan(&b.ObjectKey, &b.UploadID); err != nil {
 			return nil, err
-		}
-		if uploadID != nil {
-			b.UploadID = *uploadID
 		}
 		out = append(out, b)
 	}

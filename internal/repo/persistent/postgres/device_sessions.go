@@ -11,8 +11,6 @@ import (
 	authuc "cloud-backend/internal/usecase/auth"
 )
 
-var _ authuc.DeviceSessionRepository = (*Storage)(nil)
-
 func (s *Storage) CreateDeviceSession(ctx context.Context, id, userID uuid.UUID, device authuc.DeviceInfo) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO device_sessions (id, user_id, device_name, ip_address, user_agent)

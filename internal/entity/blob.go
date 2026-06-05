@@ -14,11 +14,11 @@ type Blob struct {
 	ContentType      string
 	ObjectKey        string
 	FileSize         int64
-	FileSizePlain    int64 // plaintext size in bytes
-	ChunkSize        int32 // frame chunk size used during encryption
+	FileSizePlain    int64
+	ChunkSize        int32
 	CreatedAt        time.Time
 	UploadedAt       *time.Time
-	EncryptedFileKey []byte // AES-KW wrapped file key
-	UploadID         string // S3 multipart upload ID; empty after CompleteMultipartUpload
+	EncryptedFileKey []byte
+	UploadID         string
 	DeletedAt        *time.Time
 }

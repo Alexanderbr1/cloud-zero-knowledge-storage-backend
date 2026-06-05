@@ -18,7 +18,7 @@ type ShareResponse struct {
 	BlobID          string    `json:"blob_id"`
 	OwnerID         string    `json:"owner_id"`
 	OwnerEmail      string    `json:"owner_email"`
-	RecipientEmail  string    `json:"recipient_email,omitempty"`
+	RecipientEmail  string    `json:"recipient_email"`
 	BlobFileName    string    `json:"file_name"`
 	BlobContentType string    `json:"content_type"`
 	EphemeralPub    string    `json:"ephemeral_pub"`    // base64

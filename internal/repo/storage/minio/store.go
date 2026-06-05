@@ -78,10 +78,6 @@ func (s *Store) EnsureBucket(ctx context.Context) error {
 	return s.client.MakeBucket(ctx, s.bucket, minio.MakeBucketOptions{})
 }
 
-func (s *Store) PresignedPutObject(ctx context.Context, objectKey string, expiry time.Duration) (*url.URL, error) {
-	return s.presignClient.PresignedPutObject(ctx, s.bucket, objectKey, expiry)
-}
-
 func (s *Store) PresignedGetObject(ctx context.Context, objectKey string, expiry time.Duration) (*url.URL, error) {
 	return s.presignClient.PresignedGetObject(ctx, s.bucket, objectKey, expiry, nil)
 }

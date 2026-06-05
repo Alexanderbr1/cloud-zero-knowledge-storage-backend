@@ -61,13 +61,12 @@ type RecoveryDataResponse struct {
 }
 
 type ResetPasswordConfirmRequest struct {
-	Token              string `json:"token"                    validate:"required"`
-	SRPSalt            string `json:"srp_salt"                 validate:"required"`
-	SRPVerifier        string `json:"srp_verifier"             validate:"required"`
-	BcryptSalt         string `json:"bcrypt_salt"              validate:"required"`
-	CryptoSalt         string `json:"crypto_salt"              validate:"required"`
-	KEKEncryptedMaster string `json:"kek_encrypted_master"     validate:"required"`
-	// New recovery material — rotated on every password reset (single-use phrase model).
+	Token                string `json:"token"                    validate:"required"`
+	SRPSalt              string `json:"srp_salt"                 validate:"required"`
+	SRPVerifier          string `json:"srp_verifier"             validate:"required"`
+	BcryptSalt           string `json:"bcrypt_salt"              validate:"required"`
+	CryptoSalt           string `json:"crypto_salt"              validate:"required"`
+	KEKEncryptedMaster   string `json:"kek_encrypted_master"     validate:"required"`
 	KEKEncryptedRecovery string `json:"kek_encrypted_recovery"   validate:"required"`
 	RecoverySalt         string `json:"recovery_salt"            validate:"required"`
 }

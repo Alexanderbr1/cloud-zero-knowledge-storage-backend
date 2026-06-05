@@ -15,7 +15,6 @@ type AuditRepo interface {
 	ListAuditEvents(ctx context.Context, userID uuid.UUID, limit int, before time.Time) ([]entity.AuditEvent, error)
 }
 
-// AuditLogger is the interface auth/storage usecases depend on.
 type AuditLogger interface {
 	LogAsync(ctx context.Context, e entity.AuditEvent)
 }

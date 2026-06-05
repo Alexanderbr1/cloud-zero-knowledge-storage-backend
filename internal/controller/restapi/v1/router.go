@@ -3,6 +3,7 @@ package v1
 import (
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -123,9 +124,15 @@ func userIDKey(r *http.Request) string {
 }
 
 func realIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	addr := r.RemoteAddr
+	// Strip CIDR suffix (e.g. "172.19.0.1/32" → "172.19.0.1") that some
+	// Docker network configurations append to the remote address.
+	if i := strings.IndexByte(addr, '/'); i != -1 {
+		addr = addr[:i]
+	}
+	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return r.RemoteAddr
+		return addr
 	}
 	return host
 }

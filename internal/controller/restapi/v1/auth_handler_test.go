@@ -54,7 +54,9 @@ func (m *mockAuthService) LoginFinalize(_ context.Context, _ authuc.LoginFinaliz
 func (m *mockAuthService) Refresh(_ context.Context, _ string) (authuc.TokenPair, error) {
 	return m.refreshPair, m.refreshErr
 }
-func (m *mockAuthService) Logout(_ context.Context, _ string) error { return m.logoutErr }
+func (m *mockAuthService) Logout(_ context.Context, _ string, _ authuc.DeviceInfo) error {
+	return m.logoutErr
+}
 func (m *mockAuthService) GetCryptoSalt(_ context.Context, _ uuid.UUID) (string, []byte, error) {
 	return m.cryptoSaltB64, m.cryptoSaltKEK, m.cryptoSaltErr
 }

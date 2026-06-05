@@ -8,7 +8,7 @@ CREATE TABLE stored_blobs (
     encrypted_file_key BYTEA       NOT NULL,
     chunk_size         INTEGER     NOT NULL,
     file_size_plain    BIGINT      NOT NULL,
-    upload_id          TEXT,
+    upload_id          TEXT        NOT NULL,
     file_size          BIGINT      NOT NULL DEFAULT 0,
     uploaded_at        TIMESTAMPTZ,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -41,3 +41,7 @@ CREATE INDEX idx_stored_blobs_purge
 CREATE INDEX idx_stored_blobs_orphaned
     ON stored_blobs (created_at)
     WHERE uploaded_at IS NULL AND deleted_at IS NULL;
+
+CREATE INDEX idx_stored_blobs_file_name_trgm
+    ON stored_blobs USING GIN (file_name gin_trgm_ops)
+    WHERE deleted_at IS NULL AND uploaded_at IS NOT NULL;

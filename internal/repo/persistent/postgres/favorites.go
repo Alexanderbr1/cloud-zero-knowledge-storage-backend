@@ -9,8 +9,6 @@ import (
 	favoritesuc "cloud-backend/internal/usecase/favorites"
 )
 
-var _ favoritesuc.FavoritesRepo = (*Storage)(nil)
-
 func (s *Storage) AddBlobFavorite(ctx context.Context, userID, blobID uuid.UUID) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO favorites (user_id, blob_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
