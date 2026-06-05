@@ -76,6 +76,7 @@ type DeviceInfo struct {
 	UserAgent  string
 	IPAddress  string
 	DeviceName string
+	DeviceID   string
 }
 
 type TokenPair struct {

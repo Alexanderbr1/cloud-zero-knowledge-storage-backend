@@ -42,7 +42,7 @@ type SessionRepository interface {
 }
 
 type DeviceSessionRepository interface {
-	CreateDeviceSession(ctx context.Context, id, userID uuid.UUID, device DeviceInfo) error
+	CreateDeviceSession(ctx context.Context, id, userID uuid.UUID, device DeviceInfo) (uuid.UUID, error)
 	UpdateLastActive(ctx context.Context, id uuid.UUID) error
 	ListActiveSessions(ctx context.Context, userID uuid.UUID) ([]entity.DeviceSession, error)
 	RevokeSession(ctx context.Context, id, userID uuid.UUID) error
@@ -461,15 +461,16 @@ func (s *Service) CleanOrphanedSessions(ctx context.Context) error {
 }
 
 func (s *Service) issueTokenPair(ctx context.Context, userID uuid.UUID, device DeviceInfo) (TokenPair, error) {
-	deviceSessionID := uuid.New()
+	proposedID := uuid.New()
 	tctx, cancel := dbCtx(ctx)
 	defer cancel()
 
-	if err := s.DeviceSessions.CreateDeviceSession(tctx, deviceSessionID, userID, device); err != nil {
+	sessionID, err := s.DeviceSessions.CreateDeviceSession(tctx, proposedID, userID, device)
+	if err != nil {
 		return TokenPair{}, fmt.Errorf("create device session: %w", err)
 	}
 
-	return s.issueTokenPairForDevice(ctx, userID, deviceSessionID, nil)
+	return s.issueTokenPairForDevice(ctx, userID, sessionID, nil)
 }
 
 // issueTokenPairForDevice creates a new refresh session. If clientKey is nil a

@@ -66,6 +66,7 @@ func register(d Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		deviceID := ensureDeviceID(r, d.RefreshCookie)
 		pair, err := d.Auth.Register(r.Context(), authuc.RegisterParams{
 			Email:                in.Email,
 			SRPSalt:              in.SRPSalt,
@@ -77,12 +78,13 @@ func register(d Deps) http.HandlerFunc {
 			KEKEncryptedMaster:   kekMaster,
 			KEKEncryptedRecovery: kekRecovery,
 			RecoverySalt:         recSalt,
-			Device:               parseDeviceInfo(r),
+			Device:               parseDeviceInfo(r, deviceID),
 		})
 		if err != nil {
 			writeAuthErr(w, err, d.Logger)
 			return
 		}
+		setDeviceCookie(w, d.RefreshCookie, deviceID)
 		writeTokenResponse(w, d.RefreshCookie, http.StatusCreated, pair, "", nil, nil)
 	}
 }
@@ -124,7 +126,8 @@ func loginFinalize(d Deps) http.HandlerFunc {
 			restapi.WriteValidationError(w, err)
 			return
 		}
-		device := parseDeviceInfo(r)
+		deviceID := ensureDeviceID(r, d.RefreshCookie)
+		device := parseDeviceInfo(r, deviceID)
 		result, err := d.Auth.LoginFinalize(r.Context(), authuc.LoginFinalizeParams{
 			SessionID: in.SessionID,
 			M1:        in.M1,
@@ -135,6 +138,7 @@ func loginFinalize(d Deps) http.HandlerFunc {
 			return
 		}
 		d.Audit.LogAsync(r.Context(), auditEvent(result.UserID, entity.AuditLoginSuccess, device.IPAddress, device.UserAgent, nil, ""))
+		setDeviceCookie(w, d.RefreshCookie, deviceID)
 		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, result.Pair, result.M2, result.EncryptedPrivateKey, result.KEKEncryptedMaster)
 	}
 }
@@ -154,6 +158,9 @@ func refresh(d Deps) http.HandlerFunc {
 			writeAuthErr(w, err, d.Logger)
 			return
 		}
+		if id := readDeviceCookie(r, d.RefreshCookie); id != "" {
+			setDeviceCookie(w, d.RefreshCookie, id)
+		}
 		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, pair, "", nil, nil)
 	}
 }
@@ -161,7 +168,7 @@ func refresh(d Deps) http.HandlerFunc {
 func logout(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rt := readRefreshToken(r, d.RefreshCookie.Name)
-		if err := d.Auth.Logout(r.Context(), rt, parseDeviceInfo(r)); err != nil {
+		if err := d.Auth.Logout(r.Context(), rt, parseDeviceInfo(r, "")); err != nil {
 			d.Logger.Warn().Err(err).Msg("logout failed")
 		}
 		clearRefreshTokenCookie(w, d.RefreshCookie)

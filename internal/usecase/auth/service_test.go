@@ -72,8 +72,8 @@ type mockDeviceRepo struct {
 	revokeOtherErr error
 }
 
-func (m *mockDeviceRepo) CreateDeviceSession(_ context.Context, _, _ uuid.UUID, _ authuc.DeviceInfo) error {
-	return m.createErr
+func (m *mockDeviceRepo) CreateDeviceSession(_ context.Context, id, _ uuid.UUID, _ authuc.DeviceInfo) (uuid.UUID, error) {
+	return id, m.createErr
 }
 func (m *mockDeviceRepo) UpdateLastActive(_ context.Context, _ uuid.UUID) error { return nil }
 func (m *mockDeviceRepo) ListActiveSessions(_ context.Context, _ uuid.UUID) ([]entity.DeviceSession, error) {

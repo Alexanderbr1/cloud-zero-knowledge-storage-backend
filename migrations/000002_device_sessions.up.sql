@@ -1,6 +1,7 @@
 CREATE TABLE device_sessions (
     id             UUID        PRIMARY KEY,
     user_id        UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_id      TEXT        NOT NULL DEFAULT '',
     device_name    TEXT        NOT NULL DEFAULT '',
     ip_address     TEXT        NOT NULL DEFAULT '',
     user_agent     TEXT        NOT NULL DEFAULT '',
@@ -12,3 +13,7 @@ CREATE TABLE device_sessions (
 CREATE INDEX idx_device_sessions_active
     ON device_sessions (user_id, last_active_at DESC)
     WHERE revoked_at IS NULL;
+
+CREATE UNIQUE INDEX idx_device_sessions_unique_device
+    ON device_sessions (user_id, device_id)
+    WHERE device_id != '' AND revoked_at IS NULL;

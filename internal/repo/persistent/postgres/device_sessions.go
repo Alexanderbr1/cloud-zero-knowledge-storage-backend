@@ -11,13 +11,41 @@ import (
 	authuc "cloud-backend/internal/usecase/auth"
 )
 
-func (s *Storage) CreateDeviceSession(ctx context.Context, id, userID uuid.UUID, device authuc.DeviceInfo) error {
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO device_sessions (id, user_id, device_name, ip_address, user_agent)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		id, userID, device.DeviceName, device.IPAddress, device.UserAgent,
-	)
-	return err
+func (s *Storage) CreateDeviceSession(ctx context.Context, id, userID uuid.UUID, device authuc.DeviceInfo) (uuid.UUID, error) {
+	if device.DeviceID == "" {
+		_, err := s.pool.Exec(ctx,
+			`INSERT INTO device_sessions (id, user_id, device_name, ip_address, user_agent)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			id, userID, device.DeviceName, device.IPAddress, device.UserAgent,
+		)
+		return id, err
+	}
+
+	var actualID uuid.UUID
+	err := s.pool.QueryRow(ctx, `
+		WITH upsert AS (
+			INSERT INTO device_sessions (id, user_id, device_id, device_name, ip_address, user_agent)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (user_id, device_id)
+				WHERE device_id != '' AND revoked_at IS NULL
+			DO UPDATE SET
+				device_name    = EXCLUDED.device_name,
+				ip_address     = EXCLUDED.ip_address,
+				user_agent     = EXCLUDED.user_agent,
+				last_active_at = now()
+			RETURNING id
+		),
+		_revoke AS (
+			UPDATE refresh_sessions SET revoked_at = now()
+			FROM upsert
+			WHERE refresh_sessions.device_session_id = upsert.id
+			  AND upsert.id != $1
+			  AND refresh_sessions.revoked_at IS NULL
+		)
+		SELECT id FROM upsert`,
+		id, userID, device.DeviceID, device.DeviceName, device.IPAddress, device.UserAgent,
+	).Scan(&actualID)
+	return actualID, err
 }
 
 func (s *Storage) UpdateLastActive(ctx context.Context, id uuid.UUID) error {
