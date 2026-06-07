@@ -44,6 +44,7 @@ type BlobRepo interface {
 
 type BlobTrashRepo interface {
 	RestoreBlob(ctx context.Context, blobID, userID uuid.UUID) (fileName string, ok bool, err error)
+	PeekTrashedBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey, fileName string, ok bool, err error)
 	HardDeleteBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey, fileName string, ok bool, err error)
 	ListTrashedBlobs(ctx context.Context, userID uuid.UUID) ([]entity.Blob, error)
 	EmptyTrashedBlobs(ctx context.Context, userID uuid.UUID) ([]EmptiedBlob, error)
@@ -163,16 +164,25 @@ func (s *Service) HardDeleteBlob(ctx context.Context, userID, blobID uuid.UUID) 
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	objectKey, fileName, ok, err := s.BlobTrash.HardDeleteBlob(dbCtx, blobID, userID)
+	// Peek first — DB record stays intact if MinIO removal fails.
+	objectKey, fileName, ok, err := s.BlobTrash.PeekTrashedBlob(dbCtx, blobID, userID)
 	if err != nil {
-		return "", fmt.Errorf("hard delete blob record: %w", err)
+		return "", fmt.Errorf("peek trashed blob: %w", err)
 	}
 	if !ok {
 		return "", ErrNotFound
 	}
 
+	// Remove from MinIO before touching the DB.
 	if err := s.Objects.RemoveObject(ctx, objectKey); err != nil {
 		return "", fmt.Errorf("remove object: %w", err)
+	}
+
+	// MinIO object is gone — now delete the DB record.
+	dbCtx2, dbCancel2 := context.WithTimeout(ctx, dbTimeout)
+	defer dbCancel2()
+	if _, _, _, err := s.BlobTrash.HardDeleteBlob(dbCtx2, blobID, userID); err != nil {
+		return "", fmt.Errorf("hard delete blob record: %w", err)
 	}
 	return fileName, nil
 }

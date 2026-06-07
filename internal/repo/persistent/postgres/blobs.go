@@ -287,6 +287,23 @@ func (s *Storage) RestoreBlob(ctx context.Context, blobID, userID uuid.UUID) (fi
 	return fileName, true, nil
 }
 
+// PeekTrashedBlob returns objectKey and fileName for a trashed blob without deleting it.
+// Use before RemoveObject so that the DB record stays intact if MinIO removal fails.
+func (s *Storage) PeekTrashedBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey, fileName string, ok bool, err error) {
+	err = s.pool.QueryRow(ctx,
+		`SELECT object_key, file_name FROM stored_blobs
+		 WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL`,
+		blobID, userID,
+	).Scan(&objectKey, &fileName)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	return objectKey, fileName, true, nil
+}
+
 func (s *Storage) HardDeleteBlob(ctx context.Context, blobID, userID uuid.UUID) (objectKey, fileName string, ok bool, err error) {
 	err = s.pool.QueryRow(ctx,
 		`DELETE FROM stored_blobs

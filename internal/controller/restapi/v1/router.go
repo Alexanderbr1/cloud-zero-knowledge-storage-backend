@@ -124,9 +124,10 @@ func userIDKey(r *http.Request) string {
 }
 
 func realIP(r *http.Request) string {
+	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		return ip
+	}
 	addr := r.RemoteAddr
-	// Strip CIDR suffix (e.g. "172.19.0.1/32" → "172.19.0.1") that some
-	// Docker network configurations append to the remote address.
 	if i := strings.IndexByte(addr, '/'); i != -1 {
 		addr = addr[:i]
 	}

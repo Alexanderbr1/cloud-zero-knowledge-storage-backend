@@ -159,6 +159,9 @@ type mockBlobTrashRepo struct {
 func (m *mockBlobTrashRepo) RestoreBlob(_ context.Context, _, _ uuid.UUID) (string, bool, error) {
 	return m.restoreName, m.restoreOk, m.restoreErr
 }
+func (m *mockBlobTrashRepo) PeekTrashedBlob(_ context.Context, _, _ uuid.UUID) (string, string, bool, error) {
+	return m.hardDeleteKey, m.hardDeleteName, m.hardDeleteOk, m.hardDeleteErr
+}
 func (m *mockBlobTrashRepo) HardDeleteBlob(_ context.Context, _, _ uuid.UUID) (string, string, bool, error) {
 	return m.hardDeleteKey, m.hardDeleteName, m.hardDeleteOk, m.hardDeleteErr
 }

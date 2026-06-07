@@ -48,7 +48,9 @@ func (m *mockAuditRepo) ListAuditEvents(_ context.Context, _ uuid.UUID, limit in
 }
 
 func newSvc(repo *mockAuditRepo) *audit.Service {
-	return &audit.Service{Repo: repo, Logger: zerolog.Nop()}
+	svc := audit.NewService(repo, zerolog.Nop())
+	svc.Start(context.Background())
+	return svc
 }
 
 // ─── ListEvents — limit clamping ──────────────────────────────────────────────
@@ -177,7 +179,8 @@ func TestLogAsync_RetriesThreeTimes_ThenGivesUp(t *testing.T) {
 func TestLogAsync_SucceedsOnSecondAttempt_StopsRetrying(t *testing.T) {
 	// We override insertErr after first call using a custom mock.
 	custom := &countingRepo{failFirst: true}
-	svcCustom := &audit.Service{Repo: custom, Logger: zerolog.Nop()}
+	svcCustom := audit.NewService(custom, zerolog.Nop())
+	svcCustom.Start(context.Background())
 
 	svcCustom.LogAsync(context.Background(), entity.AuditEvent{EventType: entity.AuditFileUploaded})
 

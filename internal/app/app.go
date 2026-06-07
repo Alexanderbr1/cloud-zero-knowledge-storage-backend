@@ -99,19 +99,17 @@ func wireDeps(
 	store := postgres.NewStorage(pool)
 	tokens := jwtpkg.NewService([]byte(cfg.JWT.Secret), cfg.JWT.AccessTTL)
 
-	blocklist  := rediscache.NewSessionBlocklist(redisClient)
+	blocklist := rediscache.NewSessionBlocklist(redisClient)
 	publicKeyRL := rediscache.NewRateLimiter(redisClient, "rl:pubkey:", 20, time.Minute)
-	loginRL     := rediscache.NewRateLimiter(redisClient, "rl:login:", 10, time.Minute)
+	loginRL := rediscache.NewRateLimiter(redisClient, "rl:login:", 10, time.Minute)
 
 	mailer := mailerpkg.New(mailerpkg.Config{
 		ResendAPIKey: cfg.SMTP.ResendAPIKey,
 		From:         cfg.SMTP.From,
 	})
 
-	auditSvc := &audituc.Service{
-		Repo:   store,
-		Logger: log,
-	}
+	auditSvc := audituc.NewService(store, log)
+	auditSvc.Start(ctx)
 
 	authSvc := &authuc.Service{
 		Users:          store,

@@ -84,7 +84,17 @@ func (s *Storage) ListActiveSessions(ctx context.Context, userID uuid.UUID) ([]e
 }
 
 func (s *Storage) RevokeSession(ctx context.Context, id, userID uuid.UUID) error {
-	tag, err := s.pool.Exec(ctx,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			_ = err
+		}
+	}()
+
+	tag, err := tx.Exec(ctx,
 		`UPDATE device_sessions
 		 SET revoked_at = now()
 		 WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`,
@@ -96,12 +106,14 @@ func (s *Storage) RevokeSession(ctx context.Context, id, userID uuid.UUID) error
 	if tag.RowsAffected() == 0 {
 		return authuc.ErrSessionNotFound
 	}
-	_, err = s.pool.Exec(ctx,
+	if _, err := tx.Exec(ctx,
 		`UPDATE refresh_sessions SET revoked_at = now()
 		 WHERE device_session_id = $1 AND revoked_at IS NULL`,
 		id,
-	)
-	return err
+	); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Storage) RevokeOtherSessions(ctx context.Context, userID, exceptID uuid.UUID) ([]uuid.UUID, error) {
