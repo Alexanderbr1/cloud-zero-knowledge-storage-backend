@@ -284,8 +284,8 @@ func writeLoginFinalizeResponse(w http.ResponseWriter, cookieCfg config.RefreshC
 		BaseTokenResponse:   baseTokenResponse(result.Pair),
 		M2:                  result.M2,
 		CryptoSalt:          base64.StdEncoding.EncodeToString(result.Pair.CryptoSalt),
-		KEKEncryptedMaster:  base64.StdEncoding.EncodeToString(result.KEKEncryptedMaster),
-		EncryptedPrivateKey: base64.StdEncoding.EncodeToString(result.EncryptedPrivateKey),
+		KEKEncryptedMaster:  base64.StdEncoding.EncodeToString(result.Pair.KEKEncryptedMaster),
+		EncryptedPrivateKey: base64.StdEncoding.EncodeToString(result.Pair.EncryptedPrivateKey),
 	})
 }
 

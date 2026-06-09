@@ -210,11 +210,9 @@ func (s *Service) LoginFinalize(ctx context.Context, p LoginFinalizeParams) (Log
 	pair.EncryptedPrivateKey = slices.Clone(entry.EncryptedPrivateKey)
 
 	return LoginFinalizeResult{
-		M2:                  m2Hex,
-		Pair:                pair,
-		EncryptedPrivateKey: entry.EncryptedPrivateKey,
-		KEKEncryptedMaster:  entry.KEKEncryptedMaster,
-		UserID:              entry.UserID,
+		M2:     m2Hex,
+		Pair:   pair,
+		UserID: entry.UserID,
 	}, nil
 }
 

@@ -100,9 +100,7 @@ type LoginInitResult struct {
 }
 
 type LoginFinalizeResult struct {
-	M2                  string
-	Pair                TokenPair
-	EncryptedPrivateKey []byte
-	KEKEncryptedMaster  []byte
-	UserID              uuid.UUID
+	M2     string
+	Pair   TokenPair
+	UserID uuid.UUID
 }

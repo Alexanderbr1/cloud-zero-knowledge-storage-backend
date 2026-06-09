@@ -240,12 +240,12 @@ func TestLoginInit_InternalError_Returns500(t *testing.T) {
 func TestLoginFinalize_HappyPath(t *testing.T) {
 	auth := &mockAuthService{
 		finalizeResult: authuc.LoginFinalizeResult{
-			M2:                  "m2hex",
-			EncryptedPrivateKey: []byte("epk"),
-			KEKEncryptedMaster:  []byte("kek"),
+			M2: "m2hex",
 			Pair: authuc.TokenPair{
-				AccessToken:     "access.token",
-				AccessExpiresIn: 900,
+				AccessToken:         "access.token",
+				AccessExpiresIn:     900,
+				EncryptedPrivateKey: []byte("epk"),
+				KEKEncryptedMaster:  []byte("kek"),
 			},
 		},
 	}
