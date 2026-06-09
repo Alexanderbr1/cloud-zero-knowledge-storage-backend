@@ -54,6 +54,15 @@ type InitiateMultipartResponse struct {
 	PartURLs []PartURLItem `json:"part_urls"`
 }
 
+type UploadedPart struct {
+	PartNumber int    `json:"part_number" validate:"required,min=1,max=10000"`
+	ETag       string `json:"etag"        validate:"required"`
+}
+
+type CompleteMultipartRequest struct {
+	Parts []UploadedPart `json:"parts" validate:"required,min=1,dive"`
+}
+
 // ─── Move / Rename ────────────────────────────────────────────────────────────
 
 type MoveBlobRequest struct {

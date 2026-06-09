@@ -311,9 +311,23 @@ func storageCompleteMultipart(d Deps) http.HandlerFunc {
 			restapi.WriteError(w, http.StatusBadRequest, "invalid blob_id")
 			return
 		}
+		var in dto.CompleteMultipartRequest
+		if err := restapi.DecodeJSON(r, &in); err != nil {
+			restapi.WriteError(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		if err := restapi.ValidateStruct(&in); err != nil {
+			restapi.WriteValidationError(w, err)
+			return
+		}
+		parts := make([]storageuc.UploadedPart, len(in.Parts))
+		for i, p := range in.Parts {
+			parts[i] = storageuc.UploadedPart{PartNumber: p.PartNumber, ETag: p.ETag}
+		}
 		if err := d.Blobs.CompleteMultipartUpload(r.Context(), storageuc.CompleteMultipartParams{
 			BlobID: blobID,
 			UserID: uid,
+			Parts:  parts,
 		}); err != nil {
 			writeStorageErr(w, err, d.Logger)
 			return

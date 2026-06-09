@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
 	"cloud-backend/config"
@@ -22,7 +21,6 @@ type AuthService interface {
 	LoginFinalize(ctx context.Context, p authuc.LoginFinalizeParams) (authuc.LoginFinalizeResult, error)
 	Refresh(ctx context.Context, refreshToken string) (authuc.TokenPair, error)
 	Logout(ctx context.Context, refreshToken string, device authuc.DeviceInfo) error
-	GetCryptoSalt(ctx context.Context, userID uuid.UUID) (cryptoSaltB64 string, kekEncMaster []byte, err error)
 	RequestPasswordReset(ctx context.Context, email string) error
 	GetRecoveryData(ctx context.Context, token string) (authuc.RecoveryData, bool, error)
 	ResetPassword(ctx context.Context, token string, p authuc.ResetPasswordParams) error
@@ -85,7 +83,7 @@ func register(d Deps) http.HandlerFunc {
 			return
 		}
 		setDeviceCookie(w, d.RefreshCookie, deviceID)
-		writeTokenResponse(w, d.RefreshCookie, http.StatusCreated, pair, "", nil, nil)
+		writeRegisterResponse(w, d.RefreshCookie, pair)
 	}
 }
 
@@ -139,7 +137,7 @@ func loginFinalize(d Deps) http.HandlerFunc {
 		}
 		d.Audit.LogAsync(r.Context(), auditEvent(result.UserID, entity.AuditLoginSuccess, device.IPAddress, device.UserAgent, nil, ""))
 		setDeviceCookie(w, d.RefreshCookie, deviceID)
-		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, result.Pair, result.M2, result.EncryptedPrivateKey, result.KEKEncryptedMaster)
+		writeLoginFinalizeResponse(w, d.RefreshCookie, result)
 	}
 }
 
@@ -161,7 +159,7 @@ func refresh(d Deps) http.HandlerFunc {
 		if id := readDeviceCookie(r, d.RefreshCookie); id != "" {
 			setDeviceCookie(w, d.RefreshCookie, id)
 		}
-		writeTokenResponse(w, d.RefreshCookie, http.StatusOK, pair, "", nil, nil)
+		writeRefreshResponse(w, d.RefreshCookie, pair)
 	}
 }
 
@@ -173,25 +171,6 @@ func logout(d Deps) http.HandlerFunc {
 		}
 		clearRefreshTokenCookie(w, d.RefreshCookie)
 		w.WriteHeader(http.StatusNoContent)
-	}
-}
-
-func getCryptoSalt(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := restapi.MustUserID(w, r)
-		if !ok {
-			return
-		}
-		saltB64, kekEncMaster, err := d.Auth.GetCryptoSalt(r.Context(), userID)
-		if err != nil {
-			d.Logger.Error().Err(err).Msg("get crypto salt")
-			restapi.WriteError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-		restapi.WriteJSON(w, http.StatusOK, dto.CryptoSaltResponse{
-			CryptoSalt:         saltB64,
-			KEKEncryptedMaster: base64.StdEncoding.EncodeToString(kekEncMaster),
-		})
 	}
 }
 
@@ -292,38 +271,50 @@ func resetPasswordConfirm(d Deps) http.HandlerFunc {
 	}
 }
 
-func writeTokenResponse(
-	w http.ResponseWriter,
-	cookieCfg config.RefreshCookieConfig,
-	status int,
-	pair authuc.TokenPair,
-	m2 string,
-	encPrivKey []byte,
-	kekEncMaster []byte,
-) {
+func writeRegisterResponse(w http.ResponseWriter, cookieCfg config.RefreshCookieConfig, pair authuc.TokenPair) {
+	setAuthCookie(w, cookieCfg, pair)
+	restapi.WriteJSON(w, http.StatusCreated, dto.RegisterResponse{
+		BaseTokenResponse: baseTokenResponse(pair),
+	})
+}
+
+func writeLoginFinalizeResponse(w http.ResponseWriter, cookieCfg config.RefreshCookieConfig, result authuc.LoginFinalizeResult) {
+	setAuthCookie(w, cookieCfg, result.Pair)
+	restapi.WriteJSON(w, http.StatusOK, dto.LoginFinalizeResponse{
+		BaseTokenResponse:   baseTokenResponse(result.Pair),
+		M2:                  result.M2,
+		CryptoSalt:          base64.StdEncoding.EncodeToString(result.Pair.CryptoSalt),
+		KEKEncryptedMaster:  base64.StdEncoding.EncodeToString(result.KEKEncryptedMaster),
+		EncryptedPrivateKey: base64.StdEncoding.EncodeToString(result.EncryptedPrivateKey),
+	})
+}
+
+func writeRefreshResponse(w http.ResponseWriter, cookieCfg config.RefreshCookieConfig, pair authuc.TokenPair) {
+	setAuthCookie(w, cookieCfg, pair)
+	restapi.WriteJSON(w, http.StatusOK, dto.RefreshResponse{
+		BaseTokenResponse:   baseTokenResponse(pair),
+		CryptoSalt:          base64.StdEncoding.EncodeToString(pair.CryptoSalt),
+		KEKEncryptedMaster:  base64.StdEncoding.EncodeToString(pair.KEKEncryptedMaster),
+		EncryptedPrivateKey: base64.StdEncoding.EncodeToString(pair.EncryptedPrivateKey),
+	})
+}
+
+func setAuthCookie(w http.ResponseWriter, cookieCfg config.RefreshCookieConfig, pair authuc.TokenPair) {
 	maxAge := int(pair.RefreshExpiresIn)
 	if maxAge < 0 {
 		maxAge = 0
 	}
 	setRefreshTokenCookie(w, cookieCfg, pair.RefreshToken, maxAge)
+}
 
-	resp := dto.TokenResponse{
+func baseTokenResponse(pair authuc.TokenPair) dto.BaseTokenResponse {
+	return dto.BaseTokenResponse{
 		AccessToken:      pair.AccessToken,
 		ExpiresIn:        pair.AccessExpiresIn,
 		RefreshExpiresIn: pair.RefreshExpiresIn,
 		TokenType:        tokenTypeBearer,
-		M2:               m2,
+		ClientKey:        base64.StdEncoding.EncodeToString(pair.ClientKey),
 	}
-	if len(encPrivKey) > 0 {
-		resp.EncryptedPrivateKey = base64.StdEncoding.EncodeToString(encPrivKey)
-	}
-	if len(kekEncMaster) > 0 {
-		resp.KEKEncryptedMaster = base64.StdEncoding.EncodeToString(kekEncMaster)
-	}
-	if len(pair.ClientKey) > 0 {
-		resp.ClientKey = base64.StdEncoding.EncodeToString(pair.ClientKey)
-	}
-	restapi.WriteJSON(w, status, resp)
 }
 
 func writeAuthErr(w http.ResponseWriter, err error, log zerolog.Logger) {

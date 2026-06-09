@@ -24,6 +24,7 @@ type mockUserRepo struct {
 	updateErr     error
 	cryptoSalt    []byte
 	kek           []byte
+	encPrivKey    []byte
 	cryptoErr     error
 	recovery      authuc.RecoveryData
 	recoveryFound bool
@@ -36,8 +37,8 @@ func (m *mockUserRepo) CreateUser(_ context.Context, _ authuc.NewUserParams) err
 func (m *mockUserRepo) GetByEmail(_ context.Context, _ string) (entity.User, bool, error) {
 	return m.user, m.found, m.getErr
 }
-func (m *mockUserRepo) GetCryptoSaltAndKEKByUserID(_ context.Context, _ uuid.UUID) ([]byte, []byte, error) {
-	return m.cryptoSalt, m.kek, m.cryptoErr
+func (m *mockUserRepo) GetCryptoSaltAndKEKByUserID(_ context.Context, _ uuid.UUID) ([]byte, []byte, []byte, error) {
+	return m.cryptoSalt, m.kek, m.encPrivKey, m.cryptoErr
 }
 func (m *mockUserRepo) GetRecoveryDataByUserID(_ context.Context, _ uuid.UUID) (authuc.RecoveryData, bool, error) {
 	return m.recovery, m.recoveryFound, m.recoveryErr
@@ -500,25 +501,6 @@ func TestLogout_AlreadyRevoked_NoError(t *testing.T) {
 
 	if err := f.svc.Logout(context.Background(), "stale-token", authuc.DeviceInfo{}); err != nil {
 		t.Fatalf("want nil for already-revoked token, got %v", err)
-	}
-}
-
-// ─── GetCryptoSalt ────────────────────────────────────────────────────────────
-
-func TestGetCryptoSalt_HappyPath(t *testing.T) {
-	f := newFixture(t)
-	f.users.cryptoSalt = []byte{1, 2, 3}
-	f.users.kek = []byte("kek-bytes")
-
-	saltB64, kek, err := f.svc.GetCryptoSalt(context.Background(), uuid.New())
-	if err != nil {
-		t.Fatalf("GetCryptoSalt: %v", err)
-	}
-	if saltB64 == "" {
-		t.Error("expected non-empty base64 salt")
-	}
-	if string(kek) != "kek-bytes" {
-		t.Errorf("kek mismatch: want %q, got %q", "kek-bytes", kek)
 	}
 }
 

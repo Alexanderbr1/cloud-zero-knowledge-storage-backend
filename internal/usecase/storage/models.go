@@ -61,9 +61,15 @@ type InitiateMultipartResult struct {
 	PartURLs []PartURL
 }
 
+type UploadedPart struct {
+	PartNumber int
+	ETag       string
+}
+
 type CompleteMultipartParams struct {
 	BlobID uuid.UUID
 	UserID uuid.UUID
+	Parts  []UploadedPart
 }
 
 type OrphanedBlob struct {

@@ -21,7 +21,7 @@ type ObjectStore interface {
 	StatObject(ctx context.Context, objectKey string) (int64, error)
 	NewMultipartUpload(ctx context.Context, objectKey string) (string, error)
 	PresignUploadPart(ctx context.Context, objectKey, uploadID string, partNumber int, expiry time.Duration) (*url.URL, error)
-	CompleteMultipartUpload(ctx context.Context, objectKey, uploadID string) error
+	CompleteMultipartUpload(ctx context.Context, objectKey, uploadID string, parts []UploadedPart) error
 	AbortMultipartUpload(ctx context.Context, objectKey, uploadID string) error
 }
 
@@ -678,7 +678,7 @@ func (s *Service) CompleteMultipartUpload(ctx context.Context, p CompleteMultipa
 		return ErrNotFound
 	}
 
-	if err := s.Objects.CompleteMultipartUpload(ctx, meta.ObjectKey, meta.UploadID); err != nil {
+	if err := s.Objects.CompleteMultipartUpload(ctx, meta.ObjectKey, meta.UploadID, p.Parts); err != nil {
 		return fmt.Errorf("complete multipart: %w", err)
 	}
 

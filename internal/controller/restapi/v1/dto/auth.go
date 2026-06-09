@@ -31,20 +31,31 @@ type LoginFinalizeRequest struct {
 	M1        string `json:"M1"         validate:"required"` // client proof (hex)
 }
 
-type CryptoSaltResponse struct {
-	CryptoSalt         string `json:"crypto_salt"`
-	KEKEncryptedMaster string `json:"kek_encrypted_master"`
+type BaseTokenResponse struct {
+	AccessToken      string `json:"access_token"`
+	ExpiresIn        int64  `json:"expires_in"`
+	RefreshExpiresIn int64  `json:"refresh_expires_in"`
+	TokenType        string `json:"token_type"`
+	ClientKey        string `json:"client_key"`
 }
 
-type TokenResponse struct {
-	AccessToken         string `json:"access_token"`
-	ExpiresIn           int64  `json:"expires_in"`
-	RefreshExpiresIn    int64  `json:"refresh_expires_in"`
-	TokenType           string `json:"token_type"`
-	M2                  string `json:"M2,omitempty"`                    // login-finalize only; client must verify
-	EncryptedPrivateKey string `json:"encrypted_private_key,omitempty"` // login-finalize only
-	KEKEncryptedMaster  string `json:"kek_encrypted_master,omitempty"`  // login-finalize only
-	ClientKey           string `json:"client_key,omitempty"`            // base64 AES-GCM key for password blob persistence
+type RegisterResponse struct {
+	BaseTokenResponse
+}
+
+type LoginFinalizeResponse struct {
+	BaseTokenResponse
+	M2                  string `json:"M2"`
+	CryptoSalt          string `json:"crypto_salt"`
+	KEKEncryptedMaster  string `json:"kek_encrypted_master"`
+	EncryptedPrivateKey string `json:"encrypted_private_key"`
+}
+
+type RefreshResponse struct {
+	BaseTokenResponse
+	CryptoSalt          string `json:"crypto_salt"`
+	KEKEncryptedMaster  string `json:"kek_encrypted_master"`
+	EncryptedPrivateKey string `json:"encrypted_private_key"`
 }
 
 type ResetPasswordRequestRequest struct {

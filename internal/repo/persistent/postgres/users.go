@@ -81,17 +81,17 @@ func (s *Storage) UpdateCredentialsAndKEK(ctx context.Context, userID uuid.UUID,
 	return err
 }
 
-func (s *Storage) GetCryptoSaltAndKEKByUserID(ctx context.Context, userID uuid.UUID) (cryptoSalt []byte, kekEncMaster []byte, err error) {
+func (s *Storage) GetCryptoSaltAndKEKByUserID(ctx context.Context, userID uuid.UUID) (cryptoSalt []byte, kekEncMaster []byte, encryptedPrivateKey []byte, err error) {
 	err = s.pool.QueryRow(ctx,
-		`SELECT crypto_salt, kek_encrypted_master FROM users WHERE id = $1`, userID,
-	).Scan(&cryptoSalt, &kekEncMaster)
+		`SELECT crypto_salt, kek_encrypted_master, encrypted_private_key FROM users WHERE id = $1`, userID,
+	).Scan(&cryptoSalt, &kekEncMaster, &encryptedPrivateKey)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return cryptoSalt, kekEncMaster, nil
+	return cryptoSalt, kekEncMaster, encryptedPrivateKey, nil
 }
 
 // nullableBytes returns nil for empty slices so nullable BYTEA columns store NULL

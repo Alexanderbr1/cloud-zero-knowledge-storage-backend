@@ -101,7 +101,6 @@ func NewRouter(d Deps) chi.Router {
 			r.Delete("/{shareID}", revokeShare(d))
 		})
 
-		r.Get("/auth/crypto-salt", getCryptoSalt(d))
 		r.With(publicKeyRL).Get("/users/public-key", getRecipientPublicKey(d))
 
 		r.Get("/audit", listAuditEvents(d))

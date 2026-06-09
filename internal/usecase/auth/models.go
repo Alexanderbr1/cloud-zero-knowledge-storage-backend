@@ -80,12 +80,15 @@ type DeviceInfo struct {
 }
 
 type TokenPair struct {
-	AccessToken      string
-	AccessExpiresIn  int64
-	RefreshToken     string
-	RefreshExpiresIn int64
-	DeviceSessionID  uuid.UUID
-	ClientKey        []byte
+	AccessToken         string
+	AccessExpiresIn     int64
+	RefreshToken        string
+	RefreshExpiresIn    int64
+	DeviceSessionID     uuid.UUID
+	ClientKey           []byte
+	CryptoSalt          []byte
+	KEKEncryptedMaster  []byte
+	EncryptedPrivateKey []byte
 }
 
 type LoginInitResult struct {

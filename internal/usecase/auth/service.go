@@ -20,7 +20,7 @@ import (
 type UserRepository interface {
 	CreateUser(ctx context.Context, p NewUserParams) error
 	GetByEmail(ctx context.Context, email string) (entity.User, bool, error)
-	GetCryptoSaltAndKEKByUserID(ctx context.Context, userID uuid.UUID) (cryptoSalt []byte, kekEncMaster []byte, err error)
+	GetCryptoSaltAndKEKByUserID(ctx context.Context, userID uuid.UUID) (cryptoSalt []byte, kekEncMaster []byte, encryptedPrivateKey []byte, err error)
 	GetRecoveryDataByUserID(ctx context.Context, userID uuid.UUID) (RecoveryData, bool, error)
 	UpdateCredentialsAndKEK(ctx context.Context, userID uuid.UUID, p ResetPasswordParams) error
 }
@@ -205,6 +205,10 @@ func (s *Service) LoginFinalize(ctx context.Context, p LoginFinalizeParams) (Log
 		}
 	}()
 
+	pair.CryptoSalt = slices.Clone(entry.CryptoSalt)
+	pair.KEKEncryptedMaster = slices.Clone(entry.KEKEncryptedMaster)
+	pair.EncryptedPrivateKey = slices.Clone(entry.EncryptedPrivateKey)
+
 	return LoginFinalizeResult{
 		M2:                  m2Hex,
 		Pair:                pair,
@@ -235,7 +239,22 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 		s.Logger.Debug().Err(err).Msg("update last_active_at failed")
 	}
 
-	return s.issueTokenPairForDevice(ctx, consumed.UserID, consumed.DeviceSessionID, consumed.ClientKey)
+	pair, err := s.issueTokenPairForDevice(ctx, consumed.UserID, consumed.DeviceSessionID, consumed.ClientKey)
+	if err != nil {
+		return TokenPair{}, err
+	}
+
+	kctx, kcancel := dbCtx(ctx)
+	defer kcancel()
+	salt, kek, encPrivKey, err := s.Users.GetCryptoSaltAndKEKByUserID(kctx, consumed.UserID)
+	if err != nil {
+		return TokenPair{}, err
+	}
+	pair.CryptoSalt = salt
+	pair.KEKEncryptedMaster = kek
+	pair.EncryptedPrivateKey = encPrivKey
+
+	return pair, nil
 }
 
 // handleTokenReuse detects refresh token reuse: if the presented token was already rotated
@@ -444,16 +463,6 @@ func (s *Service) ResetPassword(ctx context.Context, token string, p ResetPasswo
 		})
 	}
 	return nil
-}
-
-func (s *Service) GetCryptoSalt(ctx context.Context, userID uuid.UUID) (cryptoSaltB64 string, kekEncMaster []byte, err error) {
-	tctx, cancel := dbCtx(ctx)
-	defer cancel()
-	salt, kek, err := s.Users.GetCryptoSaltAndKEKByUserID(tctx, userID)
-	if err != nil {
-		return "", nil, err
-	}
-	return base64.StdEncoding.EncodeToString(salt), kek, nil
 }
 
 func (s *Service) CleanOrphanedSessions(ctx context.Context) error {

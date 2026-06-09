@@ -32,9 +32,6 @@ type mockAuthService struct {
 	refreshPair     authuc.TokenPair
 	refreshErr      error
 	logoutErr       error
-	cryptoSaltB64   string
-	cryptoSaltKEK   []byte
-	cryptoSaltErr   error
 	resetReqErr     error
 	recoveryData    authuc.RecoveryData
 	recoveryFound   bool
@@ -56,9 +53,6 @@ func (m *mockAuthService) Refresh(_ context.Context, _ string) (authuc.TokenPair
 }
 func (m *mockAuthService) Logout(_ context.Context, _ string, _ authuc.DeviceInfo) error {
 	return m.logoutErr
-}
-func (m *mockAuthService) GetCryptoSalt(_ context.Context, _ uuid.UUID) (string, []byte, error) {
-	return m.cryptoSaltB64, m.cryptoSaltKEK, m.cryptoSaltErr
 }
 func (m *mockAuthService) RequestPasswordReset(_ context.Context, _ string) error {
 	return m.resetReqErr
@@ -490,45 +484,3 @@ func TestResetPasswordConfirm_ServiceError_Returns500(t *testing.T) {
 }
 
 // ─── GET /auth/crypto-salt (protected) ───────────────────────────────────────
-
-func TestGetCryptoSalt_NoAuth_Returns401(t *testing.T) {
-	w := do(newRouter(&mockAuthService{}), http.MethodGet, "/auth/crypto-salt", "")
-
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("want 401, got %d", w.Code)
-	}
-}
-
-func TestGetCryptoSalt_HappyPath(t *testing.T) {
-	userID := uuid.New()
-	auth := &mockAuthService{
-		cryptoSaltB64: base64.StdEncoding.EncodeToString([]byte("salt-bytes")),
-		cryptoSaltKEK: []byte("kek-bytes"),
-	}
-	router := newRouterWithJWT(auth, &mockParseJWT{userID: userID, sessionID: uuid.New()})
-
-	w := doWithAuth(router, http.MethodGet, "/auth/crypto-salt", "")
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body)
-	}
-	var body map[string]string
-	decodeBody(t, w, &body)
-	if body["crypto_salt"] == "" {
-		t.Error("crypto_salt must be present")
-	}
-	if body["kek_encrypted_master"] == "" {
-		t.Error("kek_encrypted_master must be present")
-	}
-}
-
-func TestGetCryptoSalt_ServiceError_Returns500(t *testing.T) {
-	auth := &mockAuthService{cryptoSaltErr: errors.New("db error")}
-	router := newRouterWithJWT(auth, &mockParseJWT{userID: uuid.New(), sessionID: uuid.New()})
-
-	w := doWithAuth(router, http.MethodGet, "/auth/crypto-salt", "")
-
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("want 500, got %d", w.Code)
-	}
-}

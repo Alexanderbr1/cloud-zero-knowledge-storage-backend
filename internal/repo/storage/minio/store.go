@@ -11,6 +11,8 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+
+	storageuc "cloud-backend/internal/usecase/storage"
 )
 
 type StoreConfig struct {
@@ -120,32 +122,16 @@ func (s *Store) PresignUploadPart(ctx context.Context, objectKey, uploadID strin
 	return s.presignClient.Presign(ctx, "PUT", s.bucket, objectKey, expiry, params)
 }
 
-// CompleteMultipartUpload finalises the multipart upload by listing uploaded parts
-// from MinIO (avoids requiring the client to forward ETags) and assembling the object.
-func (s *Store) CompleteMultipartUpload(ctx context.Context, objectKey, uploadID string) error {
-	core := minio.Core{Client: s.client}
-
-	// Collect all uploaded parts from MinIO — avoids requiring the client to forward ETags.
-	var parts []minio.CompletePart
-	marker := 0
-	for {
-		result, err := core.ListObjectParts(ctx, s.bucket, objectKey, uploadID, marker, 1000)
-		if err != nil {
-			return fmt.Errorf("list object parts: %w", err)
-		}
-		for _, p := range result.ObjectParts {
-			parts = append(parts, minio.CompletePart{
-				PartNumber: p.PartNumber,
-				ETag:       p.ETag,
-			})
-		}
-		if !result.IsTruncated {
-			break
-		}
-		marker = result.NextPartNumberMarker
+// CompleteMultipartUpload assembles the multipart upload from the parts list
+// supplied by the client. Each part's ETag is taken from the upload response,
+// matching the standard S3 protocol.
+func (s *Store) CompleteMultipartUpload(ctx context.Context, objectKey, uploadID string, parts []storageuc.UploadedPart) error {
+	completed := make([]minio.CompletePart, len(parts))
+	for i, p := range parts {
+		completed[i] = minio.CompletePart{PartNumber: p.PartNumber, ETag: p.ETag}
 	}
-
-	_, err := core.CompleteMultipartUpload(ctx, s.bucket, objectKey, uploadID, parts, minio.PutObjectOptions{})
+	core := minio.Core{Client: s.client}
+	_, err := core.CompleteMultipartUpload(ctx, s.bucket, objectKey, uploadID, completed, minio.PutObjectOptions{})
 	return err
 }
 

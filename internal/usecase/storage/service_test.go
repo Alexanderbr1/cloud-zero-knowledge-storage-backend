@@ -62,8 +62,10 @@ func (m *mockObjectStore) PresignUploadPart(_ context.Context, _, _ string, _ in
 	u, _ := url.Parse("https://minio/part")
 	return u, nil
 }
-func (m *mockObjectStore) CompleteMultipartUpload(_ context.Context, _, _ string) error { return nil }
-func (m *mockObjectStore) AbortMultipartUpload(_ context.Context, _, _ string) error    { return nil }
+func (m *mockObjectStore) CompleteMultipartUpload(_ context.Context, _, _ string, _ []storage.UploadedPart) error {
+	return nil
+}
+func (m *mockObjectStore) AbortMultipartUpload(_ context.Context, _, _ string) error { return nil }
 
 // ─── mockBlobRepo ─────────────────────────────────────────────────────────────
 
