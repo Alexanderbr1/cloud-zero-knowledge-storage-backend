@@ -113,21 +113,6 @@ func newRouter(auth *mockAuthService) http.Handler {
 	})
 }
 
-// newRouterWithJWT builds a router with a custom JWT parser — needed for
-// protected-route tests where we control the injected user identity.
-func newRouterWithJWT(auth *mockAuthService, jwt *mockParseJWT) http.Handler {
-	return v1.NewRouter(v1.Deps{
-		Auth:                 auth,
-		Tokens:               jwt,
-		Blocklist:            &mockBlocklistHandler{},
-		LoginRateLimiter:     &mockRateLimiterAllow{},
-		PublicKeyRateLimiter: &mockRateLimiterAllow{},
-		Audit:                &mockAuditService{},
-		Logger:               zerolog.Nop(),
-		RefreshCookie:        testCookieCfg,
-	})
-}
-
 func do(router http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	var bodyReader *strings.Reader
 	if body != "" {
